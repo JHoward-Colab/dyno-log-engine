@@ -31,17 +31,17 @@ function manageOperatorStation(e) {
   var barcode = String(sheet.getRange(ranges.BARCODE_INPUT).getValue()).trim();  
     
   if (range.getA1Notation() === ranges.BARCODE_INPUT) {  
-    // 1. Clear Header Metadata Area (C3:C5, C6 cross-check, and status panels)
+    // 1. Clear Metadata Areas & Panels (C3:C6, A14:E18, B22:F23)
     sheet.getRange(ranges.CLEAR_METADATA_RANGE).clearContent(); 
     sheet.getRange("C6").clearContent(); 
-    sheet.getRange("C14:C18").clearContent();  
-    sheet.getRange("E14:E18").clearContent();  
+    sheet.getRange("A14:E18").clearContent();  
+    sheet.getRange("B22:F23").clearContent();
     sheet.getRange(ranges.PROGRAM_NAME_OUTPUT).clearContent();   
     
     // 2. Clear Results Table & Formatting (A27:L100)
     var tableRange = sheet.getRange(ranges.CLEAR_RESULTS_RANGE);   
     tableRange.clearContent();   
-    tableRange.setBackground(null).setFontColor(null).setFontWeight("normal");   
+    tableRange.setBackground(null).setFontColor(null).setFontWeight("normal").setNumberFormat("@");   
 
     if (!barcode || barcode === "undefined" || barcode === "null") return;  
       
@@ -54,6 +54,7 @@ function manageOperatorStation(e) {
     var files = DriveApp.searchFiles(searchCriteria);  
     if (!files.hasNext()) { 
       sheet.getRange(ranges.FILE_LINK_OUTPUT).setValue("❌ Work Order File Not Found: " + searchBarcode); 
+      sheet.getRange("C6").setValue("FAILED CROSS-CHECK");
       return; 
     }  
     
@@ -73,10 +74,12 @@ function manageOperatorStation(e) {
       sheet.getRange(ranges.BOM_REV_OUTPUT).setValue(woBomRevision); 
       sheet.getRange(ranges.PART_NO_OUTPUT).setValue(woPartNumber);   
 
-      // ✅ RESTORED: Cell C6 Cross-Check Verification Assignment
-      sheet.getRange("C6").setValue(searchBarcode);
+      // ✅ RESTORED: Cell C6 Production Cross-Check Verification
+      sheet.getRange("C6").setValue("MATCH: " + searchBarcode);
       
       var registrySheet = ss.getSheetByName(CONFIG.SHEET_NAMES.PROGRAM_REGISTRY);  
+      var matchedProgramName = "";
+
       if (registrySheet && woPartNumber) {  
         var regValues = registrySheet.getDataRange().getValues();  
         var cleanWoPart = String(woPartNumber).trim().toLowerCase().replace(/[-_\s]/g, "");  
@@ -89,14 +92,17 @@ function manageOperatorStation(e) {
           var regProgName = String(regValues[rR][regProgIdx] || "").trim();  
           
           if (regPartClean === cleanWoPart && regProgName) {  
+            matchedProgramName = regProgName;
             sheet.getRange(ranges.PROGRAM_NAME_OUTPUT).setValue(regProgName);  
-            sheet.getRange("E16").setValue(regProgName);  
             break;
           }  
         }  
       }  
 
-      // 3. Render matching records and apply production conditional formatting
+      // 3. Populate A14:E18 Spec Summary Panel & Limit Cells (B22:F23)
+      populateSpecSummaryAndLimits(ss, sheet, matchedProgramName || woPartNumber);
+
+      // 4. Render re-mapped dyno records with X.X formatting & out-of-spec red highlighting
       renderOperatorTableWithFormatting(ss, sheet, woPartNumber);
 
     } catch(e) {
@@ -106,8 +112,75 @@ function manageOperatorStation(e) {
 }  
 
 /**
- * Renders dyno log rows for the selected part and applies batch 
- * conditional formatting (Red highlighting for out-of-spec forces).
+ * Populates A14:E18 summary panel and B22:F23 limit cells from Part_Reference_Matrix.
+ */
+function populateSpecSummaryAndLimits(ss, sheet, programOrPart) {
+  var refSheet = ss.getSheetByName(CONFIG.SHEET_NAMES.PART_REFERENCE_MATRIX);
+  if (!refSheet || !programOrPart) return;
+
+  var refData = refSheet.getDataRange().getValues();
+  var refCols = CONFIG.COLUMNS.PART_REFERENCE_MATRIX;
+  var cleanKey = String(programOrPart).trim().toLowerCase();
+
+  var refRow = null;
+  for (var i = 1; i < refData.length; i++) {
+    var progName = String(refData[i][refCols.PROGRAM_NAME - 1] || "").trim().toLowerCase();
+    if (progName === cleanKey) {
+      refRow = refData[i];
+      break;
+    }
+  }
+
+  if (!refRow) return;
+
+  // Extract Speeds & Specs
+  var c1Min = refRow[refCols.COMP_1_MIN - 1];
+  var c1Max = refRow[refCols.COMP_1_MAX - 1];
+  var r1Min = refRow[refCols.REB_1_MIN - 1];
+  var r1Max = refRow[refCols.REB_1_MAX - 1];
+
+  var c2Min = refRow[refCols.COMP_2_MIN - 1];
+  var c2Max = refRow[refCols.COMP_2_MAX - 1];
+  var r2Min = refRow[refCols.REB_2_MIN - 1];
+  var r2Max = refRow[refCols.REB_2_MAX - 1];
+
+  var slopeMin = refRow[refCols.SLOPE_1_MIN - 1];
+  var loopAreaMin = refRow[refCols.LOOP_AREA_1_MIN - 1];
+
+  // 1. Populate A14:E18 Summary Grid
+  sheet.getRange("A14").setValue("Low Speed");
+  sheet.getRange("C14").setValue(c1Min + " / " + c1Max);
+  sheet.getRange("E14").setValue(r1Min + " / " + r1Max);
+
+  sheet.getRange("A15").setValue("High Speed");
+  sheet.getRange("C15").setValue(c2Min + " / " + c2Max);
+  sheet.getRange("E15").setValue(r2Min + " / " + r2Max);
+
+  sheet.getRange("C16").setValue(programOrPart);
+  sheet.getRange("E16").setValue(programOrPart);
+
+  sheet.getRange("A17").setValue("Slope / Loop");
+  sheet.getRange("C17").setValue(slopeMin);
+  sheet.getRange("E17").setValue(loopAreaMin);
+
+  // 2. Populate B22:F23 Explicit Limit Cells
+  var ranges = CONFIG.OPERATOR_STATION.RANGES;
+  sheet.getRange(ranges.LIMIT_C1_MIN).setValue(c1Min);
+  sheet.getRange(ranges.LIMIT_C1_MAX).setValue(c1Max);
+  sheet.getRange(ranges.LIMIT_R1_MIN).setValue(r1Min);
+  sheet.getRange(ranges.LIMIT_R1_MAX).setValue(r1Max);
+
+  sheet.getRange(ranges.LIMIT_C2_MIN).setValue(c2Min);
+  sheet.getRange(ranges.LIMIT_C2_MAX).setValue(c2Max);
+  sheet.getRange(ranges.LIMIT_R2_MIN).setValue(r2Min);
+  sheet.getRange(ranges.LIMIT_R2_MAX).setValue(r2Max);
+
+  sheet.getRange(ranges.LIMIT_SLOPE).setValue(slopeMin);
+}
+
+/**
+ * Renders dyno log rows for the selected part, mapping raw log columns 
+ * to Operator Station table columns, formatting to X.X, and applying out-of-spec red styling.
  */
 function renderOperatorTableWithFormatting(ss, sheet, partNumber) {
   var logSheet = ss.getSheetByName(CONFIG.SHEET_NAMES.MASTER_DYNO_LOG);
@@ -133,55 +206,67 @@ function renderOperatorTableWithFormatting(ss, sheet, partNumber) {
     }
   }
 
-  // Filter log data matching base model / part
+  // Filter & MAP raw log columns to Operator Station 12-column table
   var rowsToDisplay = [];
   var modelColIdx = logCols.BASE_MODEL - 1;
+
   for (var r = 1; r < logData.length; r++) {
     var row = logData[r];
     if (String(row[modelColIdx] || "").trim().toLowerCase() === cleanPart) {
-      rowsToDisplay.push(row);
+      
+      // ✅ COLUMN RE-MAPPING: Maps raw log indices to expected Operator Station table headers
+      var mappedRow = [
+        row[logCols.TRUE_SERIAL - 1],       // Col 1 (A): True Serial Number
+        row[logCols.ROD_FORCE - 1],         // Col 2 (B): Rod Force
+        row[logCols.COMP_1 - 1],            // Col 3 (C): Low Speed Comp
+        row[logCols.REB_1 - 1],             // Col 4 (D): Low Speed Reb
+        row[logCols.SLOPE_1 - 1],           // Col 5 (E): Slope
+        row[logCols.LOOP_AREA_1 - 1],       // Col 6 (F): Loop Area
+        row[logCols.COMP_2 - 1],            // Col 7 (G): High Speed Comp
+        row[logCols.REB_2 - 1],             // Col 8 (H): High Speed Reb
+        row[logCols.COMP_3 - 1],            // Col 9 (I): Speed 3 Comp
+        row[logCols.REB_3 - 1],             // Col 10 (J): Speed 3 Reb
+        row[logCols.OVERALL_STATUS - 1],    // Col 11 (K): Overall Status
+        row[logCols.TIMESTAMP - 1]          // Col 12 (L): Date / Timestamp
+      ];
+
+      rowsToDisplay.push(mappedRow);
     }
   }
 
   if (rowsToDisplay.length === 0) return;
 
-  var startRow = ranges.RESULTS_START_ROW;
+  var startRow = ranges.RESULTS_START_ROW; // Row 27
   var numRows = rowsToDisplay.length;
-  var numCols = Math.min(rowsToDisplay[0].length, ranges.RESULTS_COL_COUNT);
+  var numCols = ranges.RESULTS_COL_COUNT;   // 12 columns
   var outputRange = sheet.getRange(startRow, ranges.RESULTS_START_COL, numRows, numCols);
 
-  // Truncate row array length to match expected table column width
-  var trimmedRows = rowsToDisplay.map(function(row) {
-    return row.slice(0, numCols);
-  });
+  // 1. Write Mapped Data Values
+  outputRange.setValues(rowsToDisplay);
 
-  // 1. Write Data Values
-  outputRange.setValues(trimmedRows);
+  // 2. Set Decimal Formatting (X.X format on numeric columns B through J)
+  var numericSubRange = sheet.getRange(startRow, 2, numRows, 9);
+  numericSubRange.setNumberFormat("0.0");
 
-  // 2. Build Formatting Arrays
+  // 3. Build Formatting Arrays for Batch Highlighting
   var bgColors = [];
   var fontColors = [];
-
-  var c1Idx = logCols.COMP_1 - 1;
-  var r1Idx = logCols.REB_1 - 1;
-  var c2Idx = logCols.COMP_2 - 1;
-  var r2Idx = logCols.REB_2 - 1;
 
   for (var rIdx = 0; rIdx < numRows; rIdx++) {
     var rowBg = [];
     var rowFont = [];
-    var rowData = trimmedRows[rIdx];
+    var rowData = rowsToDisplay[rIdx];
 
     for (var cIdx = 0; cIdx < numCols; cIdx++) {
       var val = parseFloat(rowData[cIdx]);
       var isOut = false;
 
-      // Validate forces against matrix min/max bounds
+      // Check min/max bounds on mapped force columns
       if (limits && !isNaN(val)) {
-        if (cIdx === c1Idx && limits[refCols.COMP_1_MIN - 1] !== "" && (val < limits[refCols.COMP_1_MIN - 1] || val > limits[refCols.COMP_1_MAX - 1])) isOut = true;
-        if (cIdx === r1Idx && limits[refCols.REB_1_MIN - 1] !== "" && (val < limits[refCols.REB_1_MIN - 1] || val > limits[refCols.REB_1_MAX - 1])) isOut = true;
-        if (cIdx === c2Idx && limits[refCols.COMP_2_MIN - 1] !== "" && (val < limits[refCols.COMP_2_MIN - 1] || val > limits[refCols.COMP_2_MAX - 1])) isOut = true;
-        if (cIdx === r2Idx && limits[refCols.REB_2_MIN - 1] !== "" && (val < limits[refCols.REB_2_MIN - 1] || val > limits[refCols.REB_2_MAX - 1])) isOut = true;
+        if (cIdx === 2 && limits[refCols.COMP_1_MIN - 1] !== "" && (val < limits[refCols.COMP_1_MIN - 1] || val > limits[refCols.COMP_1_MAX - 1])) isOut = true; // Comp 1
+        if (cIdx === 3 && limits[refCols.REB_1_MIN - 1] !== "" && (val < limits[refCols.REB_1_MIN - 1] || val > limits[refCols.REB_1_MAX - 1])) isOut = true;   // Reb 1
+        if (cIdx === 6 && limits[refCols.COMP_2_MIN - 1] !== "" && (val < limits[refCols.COMP_2_MIN - 1] || val > limits[refCols.COMP_2_MAX - 1])) isOut = true; // Comp 2
+        if (cIdx === 7 && limits[refCols.REB_2_MIN - 1] !== "" && (val < limits[refCols.REB_2_MIN - 1] || val > limits[refCols.REB_2_MAX - 1])) isOut = true;   // Reb 2
       }
 
       if (isOut) {
@@ -196,6 +281,6 @@ function renderOperatorTableWithFormatting(ss, sheet, partNumber) {
     fontColors.push(rowFont);
   }
 
-  // 3. Batch apply formats in a single API call
+  // 4. Batch apply background and text formatting in a single API call
   outputRange.setBackgrounds(bgColors).setFontColors(fontColors);
 }
