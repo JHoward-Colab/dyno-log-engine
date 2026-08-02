@@ -65,9 +65,9 @@ const CONFIG = Object.freeze({
       TEST_1_STATUS: 22,    // Col V
       TEST_2_STATUS: 23,    // Col W
       OVERALL_STATUS: 24,   // Col X
-      DIAGNOSTICS: 25,      // Col Y
-      EVALUATION_ACTION: 26,// Col Z
-      ENG_COMMENTS: 27      // Col AA
+      DIAGNOSTICS: 25,      // Col Y -> UI Col K
+      EVALUATION_ACTION: 26,// Col Z -> UI Col J
+      ENG_COMMENTS: 27     // Col AA -> UI Col L
     }),
 
     PART_REFERENCE_MATRIX: Object.freeze({
