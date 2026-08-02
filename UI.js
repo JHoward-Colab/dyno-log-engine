@@ -80,7 +80,6 @@ function manageOperatorStation(e) {
   var barcode = String(sheet.getRange(ranges.BARCODE_INPUT).getValue()).trim();  
     
   if (range.getA1Notation() === ranges.BARCODE_INPUT) {  
-    // 1. Clear Value Cells & Formatting Only (Preserving static label cells A14:A18)
     sheet.getRange(ranges.CLEAR_METADATA_RANGE).clearContent(); 
     sheet.getRange("C6").clearContent(); 
     sheet.getRange("A8").clearContent().setBackground(null).setFontColor(null);
@@ -88,7 +87,6 @@ function manageOperatorStation(e) {
     sheet.getRange("E14:E18").clearContent();  
     sheet.getRange("B22:F23").clearContent();
     
-    // 2. Clear Results Table & Formatting (A27:L100)
     var tableRange = sheet.getRange(ranges.CLEAR_RESULTS_RANGE);   
     tableRange.clearContent();   
     tableRange.setBackground("#FFFFFF").setFontColor("#000000").setFontWeight("normal");   
@@ -124,8 +122,6 @@ function manageOperatorStation(e) {
       
       sheet.getRange(ranges.BOM_REV_OUTPUT).setValue(woBomRevision); 
       sheet.getRange(ranges.PART_NO_OUTPUT).setValue(woPartNumber);   
-
-      // Cell C6 Cross-Check Verification
       sheet.getRange("C6").setValue(searchBarcode);
       
       var registrySheet = ss.getSheetByName(CONFIG.SHEET_NAMES.PROGRAM_REGISTRY);  
@@ -146,22 +142,19 @@ function manageOperatorStation(e) {
           if (regPartClean === cleanWoPart && regProgName) {  
             matchedProgramName = regProgName;
             
-            // EXACT METADATA PANEL POPULATION (C14:C18)
-            sheet.getRange("C14").setValue(regRow[3] || ""); // Col D: Customer Account
-            sheet.getRange("C15").setValue(regRow[4] || ""); // Col E: Vehicle/Model Spec
-            sheet.getRange("C16").setValue(regRow[0] || ""); // Col A: LABA7 Program Name
-            sheet.getRange("C17").setValue(regRow[6] || ""); // Col G: Target Valving Spec
-            sheet.getRange("C18").setValue(regRow[7] || ""); // Col H: Required Clicker Targets
+            sheet.getRange("C14").setValue(regRow[3] || ""); 
+            sheet.getRange("C15").setValue(regRow[4] || ""); 
+            sheet.getRange("C16").setValue(regRow[0] || ""); 
+            sheet.getRange("C17").setValue(regRow[6] || ""); 
+            sheet.getRange("C18").setValue(regRow[7] || ""); 
             break;
           }  
         }  
       }  
 
-      // 3. Populate Limit Cells B22:F23 with absolute positive values
-      populateSpecLimits(ss, sheet, matchedProgramName || woPartNumber);
-
-      // 4. Render dyno log records directly by matching scanned barcode / part number
-      renderOperatorTableWithFormatting(ss, sheet, searchBarcode, woPartNumber);
+      var targetLookupName = matchedProgramName || woPartNumber;
+      populateSpecLimits(ss, sheet, targetLookupName);
+      renderOperatorTableWithFormatting(ss, sheet, searchBarcode, targetLookupName);
 
     } catch(e) {
       Logger.log("WO Lookup Error: " + e.toString());
@@ -170,7 +163,7 @@ function manageOperatorStation(e) {
 }  
 
 /**
- * Direct lookup helper for spec limits from Part_Reference_Matrix using correct column indices.
+ * Direct lookup helper for spec limits from Part_Reference_Matrix.
  */
 function getSpecLimitsFromMatrix(ss, programOrPart) {
   var limits = { c1Min: NaN, c1Max: NaN, r1Min: NaN, r1Max: NaN, c2Min: NaN, c2Max: NaN, r2Min: NaN, r2Max: NaN };
@@ -224,9 +217,7 @@ function populateSpecLimits(ss, sheet, programOrPart) {
 }
 
 /**
- * Queries Master_Dyno_Log directly for records matching the scanned barcode prefix.
- * Maps Col X (Overall Status) to Col I, Col Z (Evaluation Action) to Col J,
- * highlights specific out-of-spec force values in BOLD RED, and updates Cell A8.
+ * Maps Log columns and evaluates Out-Of-Spec formatting based on limits.
  */
 function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber) {
   var logSheet = ss.getSheetByName(CONFIG.SHEET_NAMES.MASTER_DYNO_LOG);
@@ -242,13 +233,13 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber)
   var ranges = CONFIG.OPERATOR_STATION.RANGES;
   var logSheetId = logSheet.getSheetId();
 
-  // Read active spec limits directly from Matrix lookup
-  var limits = getSpecLimitsFromMatrix(ss, partNumber || searchBarcode);
+  // Read limits safely
+  var limits = getSpecLimitsFromMatrix(ss, partNumber);
 
   var cleanBarcodeStr = cleanKey(searchBarcode);
   var cleanPartStr = cleanKey(partNumber);
 
-  // 1. First Pass: Collect matching entries and keep only the LATEST entry per serial
+  // 1. First Pass: Keep only LATEST entry per serial
   var latestLogBySerial = {};
 
   for (var r = 1; r < logData.length; r++) {
@@ -277,7 +268,6 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber)
   var test1FailCount = 0;
   var test2FailCount = 0;
 
-  // Natural numeric sort on unit suffixes (e.g. 1522-001, 1522-006, 1522-009, 1522-015)
   var serialKeys = Object.keys(latestLogBySerial).sort(function(a, b) {
     var mA = a.match(/(\d+)$/);
     var mB = b.match(/(\d+)$/);
@@ -286,7 +276,7 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber)
     return uA - uB;
   });
 
-  // 2. Second Pass: Build table rows and evaluate test outcomes
+  // 2. Second Pass: Build UI Rows using verified CONFIG column indexes
   for (var k = 0; k < serialKeys.length; k++) {
     var item = latestLogBySerial[serialKeys[k]];
     var row = item.data;
@@ -296,42 +286,35 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber)
     var rowLink = "#gid=" + logSheetId + "&range=A" + actualSheetRow;
     var serialHyperlinkFormula = '=HYPERLINK("' + rowLink + '", "' + trueSerial + '")';
 
-    var t1Status = String(row[logCols.TEST_1_STATUS - 1] || "").trim(); // Log Col V (idx 21)
-    var t2Status = String(row[logCols.TEST_2_STATUS - 1] || "").trim(); // Log Col W (idx 22)
+    var t1Status = String(row[logCols.TEST_1_STATUS - 1] || "").trim(); 
+    var t2Status = String(row[logCols.TEST_2_STATUS - 1] || "").trim(); 
 
-    var t1Upper = t1Status.toUpperCase();
-    var t2Upper = t2Status.toUpperCase();
+    if (t1Status.toUpperCase().includes("FAIL")) test1FailCount++;
+    if (t2Status.toUpperCase().includes("FAIL")) test2FailCount++;
 
-    if (t1Upper.includes("FAIL")) test1FailCount++;
-    if (t2Upper.includes("FAIL")) test2FailCount++;
+    var overallStat = String(row[logCols.OVERALL_STATUS - 1] || "").trim();
+    var evalAction  = String(row[logCols.EVALUATION_ACTION - 1] || "").trim(); 
 
-    // Explicit Log Column Bindings for UI Table
-    var overallStat = String(row[logCols.OVERALL_STATUS - 1] || "").trim();    // Log Col X (idx 23) -> UI Col I
-    var evalAction  = String(row[logCols.EVALUATION_ACTION - 1] || "").trim(); // Log Col Z (idx 25) -> UI Col J
-    var teardownAct = String(row[logCols.TEARDOWN_ACTION - 1] || "").trim();   // Log Col Z (idx 25)
-
-    var fullEvalAction = evalAction || teardownAct;
-
-    // 12-COLUMN TABLE MAPPING
+    // EXACT 12-COLUMN UI MAPPING
     var mappedRow = [
-      serialHyperlinkFormula,                          // Col A (1): True Serial (Hyperlink)
-      safeAbsNum(row[logCols.ROD_FORCE - 1]),          // Col B (2): Rod Force (ABS)
-      safeAbsNum(row[logCols.COMP_1 - 1]),             // Col C (3): Low Speed Comp (ABS)
-      safeAbsNum(row[logCols.REB_1 - 1]),              // Col D (4): Low Speed Reb (ABS)
-      safeAbsNum(row[logCols.COMP_2 - 1]),             // Col E (5): Med Speed Comp (ABS)
-      safeAbsNum(row[logCols.REB_2 - 1]),              // Col F (6): Med Speed Reb (ABS)
-      t1Status,                                        // Col G (7): Test 1 Status (Log Col V)
-      t2Status,                                        // Col H (8): Test 2 Status (Log Col W)
-      overallStat,                                     // Col I (9): Overall Status (Log Col X)
-      fullEvalAction,                                  // Col J (10): Evaluation Action (Log Col Z)
-      safeAbsNum(row[logCols.COMP_3 - 1]),             // Col K (11): High Speed Comp (ABS)
-      safeAbsNum(row[logCols.REB_3 - 1])              // Col L (12): High Speed Reb (ABS)
+      serialHyperlinkFormula,                          // Col A (1): Serial
+      safeAbsNum(row[logCols.ROD_FORCE - 1]),          // Col B (2): Rod Force
+      safeAbsNum(row[logCols.COMP_1 - 1]),             // Col C (3): Low Comp
+      safeAbsNum(row[logCols.REB_1 - 1]),              // Col D (4): Low Reb
+      safeAbsNum(row[logCols.COMP_2 - 1]),             // Col E (5): Med Comp
+      safeAbsNum(row[logCols.REB_2 - 1]),              // Col F (6): Med Reb
+      t1Status,                                        // Col G (7): Test 1 Status
+      t2Status,                                        // Col H (8): Test 2 Status
+      overallStat,                                     // Col I (9): Overall Status
+      evalAction,                                      // Col J (10): Evaluation Action
+      safeAbsNum(row[logCols.COMP_3 - 1]),             // Col K (11): High Comp
+      safeAbsNum(row[logCols.REB_3 - 1])               // Col L (12): High Reb
     ];
 
     rowsToDisplay.push(mappedRow);
   }
 
-  // 3. Accurate Cell A8 Work Order Status Evaluation
+  // 3. Accurate Cell A8 Work Order Status
   var statusMessage = "";
   if (rowsToDisplay.length === 0) {
     statusMessage = "PENDING TESTING";
@@ -347,19 +330,18 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber)
 
   if (rowsToDisplay.length === 0) return;
 
-  var startRow = ranges.RESULTS_START_ROW; // Row 27
+  var startRow = ranges.RESULTS_START_ROW; 
   var numRows = rowsToDisplay.length;
-  var numCols = ranges.RESULTS_COL_COUNT;   // 12 columns
+  var numCols = ranges.RESULTS_COL_COUNT;
   var outputRange = sheet.getRange(startRow, ranges.RESULTS_START_COL, numRows, numCols);
 
-  // 4. Write Mapped Data Values & Formulas
   outputRange.setValues(rowsToDisplay);
 
-  // 5. Set Decimal Formatting (X.X format on force columns B..F and K..L)
-  sheet.getRange(startRow, 2, numRows, 5).setNumberFormat("0.0");  // Cols B..F
-  sheet.getRange(startRow, 11, numRows, 2).setNumberFormat("0.0"); // Cols K..L
+  // Set decimal precision for Col B..F and K..L
+  sheet.getRange(startRow, 2, numRows, 5).setNumberFormat("0.0");  
+  sheet.getRange(startRow, 11, numRows, 2).setNumberFormat("0.0"); 
 
-  // 6. Build Explicit Formatting Arrays (Failed forces & statuses -> BOLD Dark Red on Light Red)
+  // 4. Batch Out-Of-Spec Highlighting Arrays
   var bgColors = [];
   var fontColors = [];
   var fontWeights = [];
@@ -375,26 +357,26 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber)
       var strVal = String(rowData[cIdx] || "").toUpperCase();
       var isOut = false;
 
-      // Evaluate numeric force columns against active spec limits
+      // Force bounds checks
       if (!isNaN(val)) {
-        if (cIdx === 2 && ((!isNaN(limits.c1Min) && val < limits.c1Min) || (!isNaN(limits.c1Max) && val > limits.c1Max))) isOut = true; // Low Comp (Col C)
-        if (cIdx === 3 && ((!isNaN(limits.r1Min) && val < limits.r1Min) || (!isNaN(limits.r1Max) && val > limits.r1Max))) isOut = true; // Low Reb (Col D)
-        if (cIdx === 4 && ((!isNaN(limits.c2Min) && val < limits.c2Min) || (!isNaN(limits.c2Max) && val > limits.c2Max))) isOut = true; // Med Comp (Col E)
-        if (cIdx === 5 && ((!isNaN(limits.r2Min) && val < limits.r2Min) || (!isNaN(limits.r2Max) && val > limits.r2Max))) isOut = true; // Med Reb (Col F)
+        if (cIdx === 2 && ((!isNaN(limits.c1Min) && val < limits.c1Min) || (!isNaN(limits.c1Max) && val > limits.c1Max))) isOut = true; // Col C
+        if (cIdx === 3 && ((!isNaN(limits.r1Min) && val < limits.r1Min) || (!isNaN(limits.r1Max) && val > limits.r1Max))) isOut = true; // Col D
+        if (cIdx === 4 && ((!isNaN(limits.c2Min) && val < limits.c2Min) || (!isNaN(limits.c2Max) && val > limits.c2Max))) isOut = true; // Col E
+        if (cIdx === 5 && ((!isNaN(limits.r2Min) && val < limits.r2Min) || (!isNaN(limits.r2Max) && val > limits.r2Max))) isOut = true; // Col F
       }
 
-      // Highlight status columns (Cols G, H, I) if they contain FAIL
+      // String failure checks
       if ((cIdx === 6 || cIdx === 7 || cIdx === 8) && strVal.includes("FAIL")) {
         isOut = true;
       }
 
       if (isOut) {
-        rowBg.push("#FFCCCC");   // Light Red Background
-        rowFont.push("#990000"); // Dark Red Text
-        rowWeight.push("bold");  // BOLD font for failing values
+        rowBg.push("#FFCCCC");   
+        rowFont.push("#990000"); 
+        rowWeight.push("bold");  
       } else {
-        rowBg.push("#FFFFFF");   // Clean White Background
-        rowFont.push("#000000"); // Black Text
+        rowBg.push("#FFFFFF");   
+        rowFont.push("#000000"); 
         rowWeight.push("normal");
       }
     }
@@ -403,6 +385,6 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber)
     fontWeights.push(rowWeight);
   }
 
-  // 7. Apply explicit formatting matrices in a single API call
+  // Execute styling batch
   outputRange.setBackgrounds(bgColors).setFontColors(fontColors).setFontWeights(fontWeights);
 }
