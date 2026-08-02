@@ -1,11 +1,8 @@
 // =========================================================================
 // 🖥️ USER INTERFACE & CONTROLLERS (UI.js)
-// Workspace Rendering, Button Actions & Triggers
+// Clean Baseline Script with Direct On-Screen Spec Limit Evaluation
 // =========================================================================
 
-/**
- * Master Sync Action triggered by button click on Operator Station.
- */
 function clickMasterSyncButton() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   try { processDynoFiles(); } catch(e) { Logger.log("Watch folder alert: " + e.toString()); }
@@ -18,58 +15,33 @@ function clickMasterSyncButton() {
   } catch(e) { Logger.log("Console screen alert: " + e.toString()); }
 }
 
-/**
- * Helper to safely extract positive absolute numbers.
- */
 function safeAbsNum(val) {
   if (val === "" || val === null || val === undefined) return "";
   var n = parseFloat(val);
   return isNaN(n) ? val : Math.abs(n);
 }
 
-/**
- * Normalizes string keys by stripping all non-alphanumeric characters and lowercasing.
- */
 function cleanKey(val) {
   if (val === null || val === undefined) return "";
   return String(val).toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
-/**
- * Returns sorted positive absolute min and max pair from matrix values.
- */
-function getAbsMinMax(val1, val2) {
-  var num1 = Math.abs(parseFloat(val1));
-  var num2 = Math.abs(parseFloat(val2));
-  if (isNaN(num1) && isNaN(num2)) return { min: NaN, max: NaN };
-  if (isNaN(num1)) return { min: num2, max: num2 };
-  if (isNaN(num2)) return { min: num1, max: num1 };
-  return { min: Math.min(num1, num2), max: Math.max(num1, num2) };
-}
-
-/**
- * Sets cell A8 text and dynamically formats background & text color based on the status.
- */
 function setA8Status(sheet, statusMessage) {
   var a8 = sheet.getRange("A8");
   a8.setValue(statusMessage);
-
   var upper = String(statusMessage).toUpperCase();
 
   if (upper.includes("COMPLETED AND PASSING")) {
-    a8.setBackground("#00C853").setFontColor("#FFFFFF").setFontWeight("bold"); // Bright Green
+    a8.setBackground("#00C853").setFontColor("#FFFFFF").setFontWeight("bold");
   } else if (upper.includes("FAIL") || upper.includes("ACTION REQUIRED") || upper.includes("NOT FOUND")) {
-    a8.setBackground("#D50000").setFontColor("#FFFFFF").setFontWeight("bold"); // Bright Red
+    a8.setBackground("#D50000").setFontColor("#FFFFFF").setFontWeight("bold");
   } else if (upper.includes("CONDITIONAL") || upper.includes("ATTENTION") || upper.includes("PENDING") || upper.includes("IN PROGRESS")) {
-    a8.setBackground("#FFD600").setFontColor("#000000").setFontWeight("bold"); // Bright Yellow
+    a8.setBackground("#FFD600").setFontColor("#000000").setFontWeight("bold");
   } else {
     a8.setBackground(null).setFontColor(null).setFontWeight("normal");
   }
 }
 
-/**
- * Operator Station Event Manager for Barcode Scanning & Work Order Lookup.
- */
 function manageOperatorStation(e) {
   var ss = e ? e.source : SpreadsheetApp.getActiveSpreadsheet(); 
   var sheet = ss.getSheetByName(CONFIG.SHEET_NAMES.OPERATOR_STATION); 
@@ -141,7 +113,6 @@ function manageOperatorStation(e) {
           
           if (regPartClean === cleanWoPart && regProgName) {  
             matchedProgramName = regProgName;
-            
             sheet.getRange("C14").setValue(regRow[3] || ""); 
             sheet.getRange("C15").setValue(regRow[4] || ""); 
             sheet.getRange("C16").setValue(regRow[0] || ""); 
@@ -152,9 +123,8 @@ function manageOperatorStation(e) {
         }  
       }  
 
-      var targetLookupName = matchedProgramName || woPartNumber;
-      populateSpecLimits(ss, sheet, targetLookupName);
-      renderOperatorTableWithFormatting(ss, sheet, searchBarcode, targetLookupName);
+      populateSpecLimits(ss, sheet, matchedProgramName || woPartNumber);
+      renderOperatorTableWithFormatting(ss, sheet, searchBarcode, woPartNumber);
 
     } catch(e) {
       Logger.log("WO Lookup Error: " + e.toString());
@@ -162,13 +132,9 @@ function manageOperatorStation(e) {
   }  
 }  
 
-/**
- * Direct lookup helper for spec limits from Part_Reference_Matrix.
- */
-function getSpecLimitsFromMatrix(ss, programOrPart) {
-  var limits = { c1Min: NaN, c1Max: NaN, r1Min: NaN, r1Max: NaN, c2Min: NaN, c2Max: NaN, r2Min: NaN, r2Max: NaN };
+function populateSpecLimits(ss, sheet, programOrPart) {
   var refSheet = ss.getSheetByName(CONFIG.SHEET_NAMES.PART_REFERENCE_MATRIX);
-  if (!refSheet || !programOrPart) return limits;
+  if (!refSheet || !programOrPart) return;
 
   var refData = refSheet.getDataRange().getValues();
   var refCols = CONFIG.COLUMNS.PART_REFERENCE_MATRIX;
@@ -183,42 +149,21 @@ function getSpecLimitsFromMatrix(ss, programOrPart) {
     }
   }
 
-  if (!refRow) return limits;
+  if (!refRow) return;
 
-  var c1 = getAbsMinMax(refRow[refCols.COMP_1_MIN - 1], refRow[refCols.COMP_1_MAX - 1]);
-  var r1 = getAbsMinMax(refRow[refCols.REB_1_MIN - 1], refRow[refCols.REB_1_MAX - 1]);
-  var c2 = getAbsMinMax(refRow[refCols.COMP_2_MIN - 1], refRow[refCols.COMP_2_MAX - 1]);
-  var r2 = getAbsMinMax(refRow[refCols.REB_2_MIN - 1], refRow[refCols.REB_2_MAX - 1]);
-
-  return {
-    c1Min: c1.min, c1Max: c1.max,
-    r1Min: r1.min, r1Max: r1.max,
-    c2Min: c2.min, c2Max: c2.max,
-    r2Min: r2.min, r2Max: r2.max
-  };
-}
-
-/**
- * Populates spec limit cells (B22:F23) with positive absolute values.
- */
-function populateSpecLimits(ss, sheet, programOrPart) {
-  var limits = getSpecLimitsFromMatrix(ss, programOrPart);
   var ranges = CONFIG.OPERATOR_STATION.RANGES;
 
-  sheet.getRange(ranges.LIMIT_C1_MIN).setValue(isNaN(limits.c1Min) ? "" : limits.c1Min);
-  sheet.getRange(ranges.LIMIT_C1_MAX).setValue(isNaN(limits.c1Max) ? "" : limits.c1Max);
-  sheet.getRange(ranges.LIMIT_R1_MIN).setValue(isNaN(limits.r1Min) ? "" : limits.r1Min);
-  sheet.getRange(ranges.LIMIT_R1_MAX).setValue(isNaN(limits.r1Max) ? "" : limits.r1Max);
+  sheet.getRange(ranges.LIMIT_C1_MIN).setValue(Math.abs(parseFloat(refRow[refCols.COMP_1_MIN - 1])) || "");
+  sheet.getRange(ranges.LIMIT_C1_MAX).setValue(Math.abs(parseFloat(refRow[refCols.COMP_1_MAX - 1])) || "");
+  sheet.getRange(ranges.LIMIT_R1_MIN).setValue(Math.abs(parseFloat(refRow[refCols.REB_1_MIN - 1])) || "");
+  sheet.getRange(ranges.LIMIT_R1_MAX).setValue(Math.abs(parseFloat(refRow[refCols.REB_1_MAX - 1])) || "");
 
-  sheet.getRange(ranges.LIMIT_C2_MIN).setValue(isNaN(limits.c2Min) ? "" : limits.c2Min);
-  sheet.getRange(ranges.LIMIT_C2_MAX).setValue(isNaN(limits.c2Max) ? "" : limits.c2Max);
-  sheet.getRange(ranges.LIMIT_R2_MIN).setValue(isNaN(limits.r2Min) ? "" : limits.r2Min);
-  sheet.getRange(ranges.LIMIT_R2_MAX).setValue(isNaN(limits.r2Max) ? "" : limits.r2Max);
+  sheet.getRange(ranges.LIMIT_C2_MIN).setValue(Math.abs(parseFloat(refRow[refCols.COMP_2_MIN - 1])) || "");
+  sheet.getRange(ranges.LIMIT_C2_MAX).setValue(Math.abs(parseFloat(refRow[refCols.COMP_2_MAX - 1])) || "");
+  sheet.getRange(ranges.LIMIT_R2_MIN).setValue(Math.abs(parseFloat(refRow[refCols.REB_2_MIN - 1])) || "");
+  sheet.getRange(ranges.LIMIT_R2_MAX).setValue(Math.abs(parseFloat(refRow[refCols.REB_2_MAX - 1])) || "");
 }
 
-/**
- * Maps Log columns and evaluates Out-Of-Spec formatting based on limits.
- */
 function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber) {
   var logSheet = ss.getSheetByName(CONFIG.SHEET_NAMES.MASTER_DYNO_LOG);
   if (!logSheet) return;
@@ -233,13 +178,22 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber)
   var ranges = CONFIG.OPERATOR_STATION.RANGES;
   var logSheetId = logSheet.getSheetId();
 
-  // Read limits safely
-  var limits = getSpecLimitsFromMatrix(ss, partNumber);
+  // Read active spec limits DIRECTLY off the sheet display (B22:E23)
+  var limitValues = sheet.getRange("B22:E23").getValues();
+  var limits = {
+    c1Min: Math.abs(parseFloat(limitValues[0][0])), // B22
+    c1Max: Math.abs(parseFloat(limitValues[1][0])), // B23
+    r1Min: Math.abs(parseFloat(limitValues[0][1])), // C22
+    r1Max: Math.abs(parseFloat(limitValues[1][1])), // C23
+    c2Min: Math.abs(parseFloat(limitValues[0][2])), // D22
+    c2Max: Math.abs(parseFloat(limitValues[1][2])), // D23
+    r2Min: Math.abs(parseFloat(limitValues[0][3])), // E22
+    r2Max: Math.abs(parseFloat(limitValues[1][3]))  // E23
+  };
 
   var cleanBarcodeStr = cleanKey(searchBarcode);
   var cleanPartStr = cleanKey(partNumber);
 
-  // 1. First Pass: Keep only LATEST entry per serial
   var latestLogBySerial = {};
 
   for (var r = 1; r < logData.length; r++) {
@@ -256,11 +210,7 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber)
     }
 
     if (isMatch && trueSerial !== "") {
-      latestLogBySerial[cleanSerial] = {
-        rowIdx: r + 1,
-        data: row,
-        trueSerial: trueSerial
-      };
+      latestLogBySerial[cleanSerial] = { rowIdx: r + 1, data: row, trueSerial: trueSerial };
     }
   }
 
@@ -276,7 +226,6 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber)
     return uA - uB;
   });
 
-  // 2. Second Pass: Build UI Rows using verified CONFIG column indexes
   for (var k = 0; k < serialKeys.length; k++) {
     var item = latestLogBySerial[serialKeys[k]];
     var row = item.data;
@@ -286,35 +235,33 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber)
     var rowLink = "#gid=" + logSheetId + "&range=A" + actualSheetRow;
     var serialHyperlinkFormula = '=HYPERLINK("' + rowLink + '", "' + trueSerial + '")';
 
-    var t1Status = String(row[logCols.TEST_1_STATUS - 1] || "").trim(); 
-    var t2Status = String(row[logCols.TEST_2_STATUS - 1] || "").trim(); 
+    var t1Status = String(row[logCols.TEST_1_STATUS - 1] || "").trim();
+    var t2Status = String(row[logCols.TEST_2_STATUS - 1] || "").trim();
 
     if (t1Status.toUpperCase().includes("FAIL")) test1FailCount++;
     if (t2Status.toUpperCase().includes("FAIL")) test2FailCount++;
 
     var overallStat = String(row[logCols.OVERALL_STATUS - 1] || "").trim();
-    var evalAction  = String(row[logCols.EVALUATION_ACTION - 1] || "").trim(); 
+    var evalAction  = String(row[logCols.EVALUATION_ACTION - 1] || "").trim();
 
-    // EXACT 12-COLUMN UI MAPPING
     var mappedRow = [
-      serialHyperlinkFormula,                          // Col A (1): Serial
-      safeAbsNum(row[logCols.ROD_FORCE - 1]),          // Col B (2): Rod Force
-      safeAbsNum(row[logCols.COMP_1 - 1]),             // Col C (3): Low Comp
-      safeAbsNum(row[logCols.REB_1 - 1]),              // Col D (4): Low Reb
-      safeAbsNum(row[logCols.COMP_2 - 1]),             // Col E (5): Med Comp
-      safeAbsNum(row[logCols.REB_2 - 1]),              // Col F (6): Med Reb
-      t1Status,                                        // Col G (7): Test 1 Status
-      t2Status,                                        // Col H (8): Test 2 Status
-      overallStat,                                     // Col I (9): Overall Status
-      evalAction,                                      // Col J (10): Evaluation Action
-      safeAbsNum(row[logCols.COMP_3 - 1]),             // Col K (11): High Comp
-      safeAbsNum(row[logCols.REB_3 - 1])               // Col L (12): High Reb
+      serialHyperlinkFormula,                          // Col A (1)
+      safeAbsNum(row[logCols.ROD_FORCE - 1]),          // Col B (2)
+      safeAbsNum(row[logCols.COMP_1 - 1]),             // Col C (3)
+      safeAbsNum(row[logCols.REB_1 - 1]),              // Col D (4)
+      safeAbsNum(row[logCols.COMP_2 - 1]),             // Col E (5)
+      safeAbsNum(row[logCols.REB_2 - 1]),              // Col F (6)
+      t1Status,                                        // Col G (7)
+      t2Status,                                        // Col H (8)
+      overallStat,                                     // Col I (9)
+      evalAction,                                      // Col J (10)
+      safeAbsNum(row[logCols.COMP_3 - 1]),             // Col K (11)
+      safeAbsNum(row[logCols.REB_3 - 1])               // Col L (12)
     ];
 
     rowsToDisplay.push(mappedRow);
   }
 
-  // 3. Accurate Cell A8 Work Order Status
   var statusMessage = "";
   if (rowsToDisplay.length === 0) {
     statusMessage = "PENDING TESTING";
@@ -337,11 +284,9 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber)
 
   outputRange.setValues(rowsToDisplay);
 
-  // Set decimal precision for Col B..F and K..L
   sheet.getRange(startRow, 2, numRows, 5).setNumberFormat("0.0");  
   sheet.getRange(startRow, 11, numRows, 2).setNumberFormat("0.0"); 
 
-  // 4. Batch Out-Of-Spec Highlighting Arrays
   var bgColors = [];
   var fontColors = [];
   var fontWeights = [];
@@ -357,15 +302,13 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber)
       var strVal = String(rowData[cIdx] || "").toUpperCase();
       var isOut = false;
 
-      // Force bounds checks
       if (!isNaN(val)) {
-        if (cIdx === 2 && ((!isNaN(limits.c1Min) && val < limits.c1Min) || (!isNaN(limits.c1Max) && val > limits.c1Max))) isOut = true; // Col C
-        if (cIdx === 3 && ((!isNaN(limits.r1Min) && val < limits.r1Min) || (!isNaN(limits.r1Max) && val > limits.r1Max))) isOut = true; // Col D
-        if (cIdx === 4 && ((!isNaN(limits.c2Min) && val < limits.c2Min) || (!isNaN(limits.c2Max) && val > limits.c2Max))) isOut = true; // Col E
-        if (cIdx === 5 && ((!isNaN(limits.r2Min) && val < limits.r2Min) || (!isNaN(limits.r2Max) && val > limits.r2Max))) isOut = true; // Col F
+        if (cIdx === 2 && ((!isNaN(limits.c1Min) && val < limits.c1Min) || (!isNaN(limits.c1Max) && val > limits.c1Max))) isOut = true;
+        if (cIdx === 3 && ((!isNaN(limits.r1Min) && val < limits.r1Min) || (!isNaN(limits.r1Max) && val > limits.r1Max))) isOut = true;
+        if (cIdx === 4 && ((!isNaN(limits.c2Min) && val < limits.c2Min) || (!isNaN(limits.c2Max) && val > limits.c2Max))) isOut = true;
+        if (cIdx === 5 && ((!isNaN(limits.r2Min) && val < limits.r2Min) || (!isNaN(limits.r2Max) && val > limits.r2Max))) isOut = true;
       }
 
-      // String failure checks
       if ((cIdx === 6 || cIdx === 7 || cIdx === 8) && strVal.includes("FAIL")) {
         isOut = true;
       }
@@ -385,6 +328,5 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber)
     fontWeights.push(rowWeight);
   }
 
-  // Execute styling batch
   outputRange.setBackgrounds(bgColors).setFontColors(fontColors).setFontWeights(fontWeights);
 }

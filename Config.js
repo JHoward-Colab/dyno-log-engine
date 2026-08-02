@@ -1,6 +1,6 @@
 // =========================================================================
 // ⚙️ GLOBAL CONFIGURATION & CONSTANTS (Config.js)
-// Single Source of Truth for Sheet Names, Ranges, and Column Mappings
+// Clean Baseline Configuration
 // =========================================================================
 
 const CONFIG = Object.freeze({
@@ -11,7 +11,6 @@ const CONFIG = Object.freeze({
     PROGRAM_REGISTRY: "Program_Registry"
   }),
 
-  // 🔒 DEV-SAFE FOLDER TARGETS
   FOLDERS: Object.freeze({
     WATCH_FOLDER: "01_Watch_Folder_DEV",
     ARCHIVE_FOLDER: "02_Archive_DEV"
@@ -45,7 +44,6 @@ const CONFIG = Object.freeze({
   }),
 
   COLUMNS: Object.freeze({
-    // EXACT LAYOUT PROVIDED BY USER
     MASTER_DYNO_LOG: Object.freeze({
       TRUE_SERIAL: 1,       // Col A
       BASE_MODEL: 2,        // Col B
@@ -65,7 +63,6 @@ const CONFIG = Object.freeze({
       ENG_COMMENTS: 28      // Col AB
     }),
 
-    // EXACT LAYOUT PROVIDED BY USER
     PART_REFERENCE_MATRIX: Object.freeze({
       PROGRAM_NAME: 1,
       COMP_1_MIN: 2,
