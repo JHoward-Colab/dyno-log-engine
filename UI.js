@@ -180,8 +180,8 @@ function populateSpecLimits(ss, sheet, programOrPart) {
 
 /**
  * Queries Master_Dyno_Log directly for records matching the scanned barcode prefix.
- * Maps raw log columns to Operator Station 12-column layout, formats forces with ABS,
- * maps Col V & W to Col G & H, and updates cell A8 Work Order status.
+ * Deduplicates by True Serial (keeping the latest test entry), maps Col V & W to Col G & H,
+ * and accurately calculates cell A8 Work Order status.
  */
 function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber) {
   var logSheet = ss.getSheetByName(CONFIG.SHEET_NAMES.MASTER_DYNO_LOG);
@@ -211,22 +211,18 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber)
   var cleanBarcode = String(searchBarcode).trim().toLowerCase();
   var cleanPart = String(partNumber).trim().toLowerCase();
 
-  var rowsToDisplay = [];
-  var test1PassCount = 0;
-  var test1FailCount = 0;
-  var test2PassCount = 0;
-  var test2FailCount = 0;
-
   // Determine Col V (22) and Col W (23) column indices (0-indexed)
   var colTest1Idx = (logCols && logCols.TEST_1_STATUS) ? (logCols.TEST_1_STATUS - 1) : 21; // Col V
   var colTest2Idx = (logCols && logCols.TEST_2_STATUS) ? (logCols.TEST_2_STATUS - 1) : 22; // Col W
+
+  // 1. First Pass: Collect matching entries and keep only the LATEST entry per serial
+  var latestLogBySerial = {};
 
   for (var r = 1; r < logData.length; r++) {
     var row = logData[r];
     var trueSerial = String(row[logCols.TRUE_SERIAL - 1] || "").trim();
     var baseModel = String(row[logCols.BASE_MODEL - 1] || "").trim().toLowerCase();
 
-    // Filter: Match serial against scanned WO barcode prefix or base model
     var isMatch = false;
     if (cleanBarcode !== "" && trueSerial.toLowerCase().includes(cleanBarcode)) {
       isMatch = true;
@@ -234,64 +230,83 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber)
       isMatch = true;
     }
 
-    if (isMatch) {
-      // Hyperlink jumping directly to exact row on Master_Dyno_Log
-      var actualSheetRow = r + 1;
-      var rowLink = "#gid=" + logSheetId + "&range=A" + actualSheetRow;
-      var serialHyperlinkFormula = '=HYPERLINK("' + rowLink + '", "' + trueSerial + '")';
-
-      // Pull Test 1 & Test 2 Statuses directly from Col V & W
-      var t1Status = String(row[colTest1Idx] || "").trim();
-      var t2Status = String(row[colTest2Idx] || "").trim();
-
-      if (t1Status.toUpperCase() === "PASS") test1PassCount++;
-      else if (t1Status.toUpperCase() === "FAIL") test1FailCount++;
-
-      if (t2Status.toUpperCase() === "PASS") test2PassCount++;
-      else if (t2Status.toUpperCase() === "FAIL") test2FailCount++;
-
-      // Status combinations
-      var overallStat = String(row[logCols.OVERALL_STATUS - 1] || "").trim();
-      var teardownAct = String(row[logCols.TEARDOWN_ACTION - 1] || "").trim();
-      var evalActionCombo = overallStat + (teardownAct ? " / " + teardownAct : "");
-
-      var diagNotes = String(row[logCols.DIAGNOSTICS - 1] || "").trim();
-      var engComm = String(row[logCols.ENG_COMMENTS - 1] || "").trim();
-      var diagCombo = diagNotes + (engComm ? " | " + engComm : "");
-
-      // 12-COLUMN TABLE MAPPING
-      // Col G (7) = Test 1 Status (Col V), Col H (8) = Test 2 Status (Col W)
-      var mappedRow = [
-        serialHyperlinkFormula,                     // Col A (1): True Serial (Hyperlink)
-        safeAbsNum(row[logCols.ROD_FORCE - 1]),     // Col B (2): Rod Force (ABS)
-        safeAbsNum(row[logCols.COMP_1 - 1]),        // Col C (3): Low Speed Comp (ABS)
-        safeAbsNum(row[logCols.REB_1 - 1]),         // Col D (4): Low Speed Reb (ABS)
-        safeAbsNum(row[logCols.COMP_2 - 1]),        // Col E (5): Med Speed Comp (ABS)
-        safeAbsNum(row[logCols.REB_2 - 1]),         // Col F (6): Med Speed Reb (ABS)
-        t1Status,                                   // Col G (7): Test 1 Status (Log Col V)
-        t2Status,                                   // Col H (8): Test 2 Status (Log Col W)
-        safeAbsNum(row[logCols.COMP_3 - 1]),        // Col I (9): High Speed Comp (ABS)
-        safeAbsNum(row[logCols.REB_3 - 1]),         // Col J (10): High Speed Reb (ABS)
-        evalActionCombo,                            // Col K (11): Overall Status / Eval Action
-        diagCombo                                   // Col L (12): Diagnostic Notes
-      ];
-
-      rowsToDisplay.push(mappedRow);
+    if (isMatch && trueSerial !== "") {
+      latestLogBySerial[trueSerial.toLowerCase()] = {
+        rowIdx: r + 1,
+        data: row,
+        trueSerial: trueSerial
+      };
     }
   }
 
-  // Evaluate Cell A8 Work Order Status
+  var rowsToDisplay = [];
+  var test1FailCount = 0;
+  var test2FailCount = 0;
+
+  // Sort serials sequentially
+  var serialKeys = Object.keys(latestLogBySerial).sort();
+
+  // 2. Second Pass: Build table rows and evaluate test outcomes
+  for (var k = 0; k < serialKeys.length; k++) {
+    var item = latestLogBySerial[serialKeys[k]];
+    var row = item.data;
+    var actualSheetRow = item.rowIdx;
+    var trueSerial = item.trueSerial;
+
+    var rowLink = "#gid=" + logSheetId + "&range=A" + actualSheetRow;
+    var serialHyperlinkFormula = '=HYPERLINK("' + rowLink + '", "' + trueSerial + '")';
+
+    var t1Status = String(row[colTest1Idx] || "").trim();
+    var t2Status = String(row[colTest2Idx] || "").trim();
+
+    var t1Upper = t1Status.toUpperCase();
+    var t2Upper = t2Status.toUpperCase();
+
+    // Flexible string check for any variation of "FAIL"
+    if (t1Upper.includes("FAIL")) {
+      test1FailCount++;
+    }
+    if (t2Upper.includes("FAIL")) {
+      test2FailCount++;
+    }
+
+    var overallStat = String(row[logCols.OVERALL_STATUS - 1] || "").trim();
+    var teardownAct = String(row[logCols.TEARDOWN_ACTION - 1] || "").trim();
+    var evalActionCombo = overallStat + (teardownAct ? " / " + teardownAct : "");
+
+    var diagNotes = String(row[logCols.DIAGNOSTICS - 1] || "").trim();
+    var engComm = String(row[logCols.ENG_COMMENTS - 1] || "").trim();
+    var diagCombo = diagNotes + (engComm ? " | " + engComm : "");
+
+    // 12-COLUMN TABLE MAPPING
+    var mappedRow = [
+      serialHyperlinkFormula,                     // Col A (1): True Serial (Hyperlink)
+      safeAbsNum(row[logCols.ROD_FORCE - 1]),     // Col B (2): Rod Force (ABS)
+      safeAbsNum(row[logCols.COMP_1 - 1]),        // Col C (3): Low Speed Comp (ABS)
+      safeAbsNum(row[logCols.REB_1 - 1]),         // Col D (4): Low Speed Reb (ABS)
+      safeAbsNum(row[logCols.COMP_2 - 1]),        // Col E (5): Med Speed Comp (ABS)
+      safeAbsNum(row[logCols.REB_2 - 1]),         // Col F (6): Med Speed Reb (ABS)
+      t1Status,                                   // Col G (7): Test 1 Status (Log Col V)
+      t2Status,                                   // Col H (8): Test 2 Status (Log Col W)
+      safeAbsNum(row[logCols.COMP_3 - 1]),        // Col I (9): High Speed Comp (ABS)
+      safeAbsNum(row[logCols.REB_3 - 1]),         // Col J (10): High Speed Reb (ABS)
+      evalActionCombo,                            // Col K (11): Overall Status / Eval Action
+      diagCombo                                   // Col L (12): Diagnostic Notes
+    ];
+
+    rowsToDisplay.push(mappedRow);
+  }
+
+  // 3. Accurate Cell A8 Work Order Status Evaluation
   var statusMessage = "";
   if (rowsToDisplay.length === 0) {
     statusMessage = "PENDING TESTING";
   } else if (test1FailCount > 0) {
     statusMessage = "ACTION REQUIRED: Test 1 Failure Detected (" + test1FailCount + " unit(s))";
   } else if (test2FailCount > 0) {
-    statusMessage = "CONDITIONAL PASS: Attention Required (Test 2 Outlier Detected)";
-  } else if (test1FailCount === 0 && test2FailCount === 0) {
-    statusMessage = "WORK ORDER COMPLETED AND PASSING";
+    statusMessage = "CONDITIONAL PASS: Attention Required (Test 2 Outlier Detected - " + test2FailCount + " unit(s))";
   } else {
-    statusMessage = "IN PROGRESS: " + rowsToDisplay.length + " Units Logged";
+    statusMessage = "WORK ORDER COMPLETED AND PASSING";
   }
 
   sheet.getRange("A8").setValue(statusMessage);
@@ -303,14 +318,14 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber)
   var numCols = ranges.RESULTS_COL_COUNT;   // 12 columns
   var outputRange = sheet.getRange(startRow, ranges.RESULTS_START_COL, numRows, numCols);
 
-  // 1. Write Mapped Data Values & Formulas
+  // 4. Write Mapped Data Values & Formulas
   outputRange.setValues(rowsToDisplay);
 
-  // 2. Set Decimal Formatting (X.X format on force columns B..F and I..J, skipping G & H)
+  // 5. Set Decimal Formatting (X.X format on force columns B..F and I..J, skipping G & H)
   sheet.getRange(startRow, 2, numRows, 5).setNumberFormat("0.0"); // Cols B..F
   sheet.getRange(startRow, 9, numRows, 2).setNumberFormat("0.0"); // Cols I..J
 
-  // 3. Build Formatting Arrays for Batch Highlighting
+  // 6. Build Formatting Arrays for Batch Highlighting
   var bgColors = [];
   var fontColors = [];
 
@@ -342,6 +357,6 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber)
     fontColors.push(rowFont);
   }
 
-  // 4. Batch apply background and text formatting in a single API call
+  // 7. Batch apply background and text formatting in a single API call
   outputRange.setBackgrounds(bgColors).setFontColors(fontColors);
 }
