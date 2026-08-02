@@ -68,6 +68,7 @@ var CONFIG = {
 
     PART_REFERENCE_MATRIX: {
       PROGRAM_NAME: 1,
+      BASE_MODEL: 3,
       COMP_1_MIN: 2,
       COMP_1_MAX: 3,
       REB_1_MIN: 4,
@@ -83,5 +84,18 @@ var CONFIG = {
       PROGRAM_NAME: 1,
       BASE_MODEL: 2
     }
+  },
+
+  NOMINAL_SPEEDS: [100, 400, 1000, 2500],
+
+  STATUS: {
+    PASS: "PASS",
+    FAIL: "FAIL",
+    FAIL_BLUEPRINT: "FAIL (BLUEPRINT)",
+    FAIL_OUTLIER: "FAIL (OUTLIER)",
+    OVERRIDE_PASS: "PASS (OVERRIDE)",
+    INITIALIZING: "INITIALIZING",
+    NOT_RUN: "NOT RUN",
+    NOT_TESTED: "NOT TESTED YET"
   }
 };
