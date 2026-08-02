@@ -5,24 +5,12 @@
 
 function clickMasterSyncButton() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
-  var ui = SpreadsheetApp.getUi();
-  ss.toast("Syncing Work Order...", "Operator Station", 3);
-
   var sheet = ss.getSheetByName("Operator Station") || ss.getSheetByName("Operator_Station");
-  if (!sheet) {
-    ui.alert("Sheet 'Operator Station' not found.");
-    return;
-  }
+  if (!sheet) return;
 
-  try { processDynoFiles(); } catch(e) { Logger.log("Watch folder bypass: " + e.toString()); }
-  try { retroactiveLogRecalculate(); } catch(e) { Logger.log("Matrix recalc bypass: " + e.toString()); }
-
-  try {
-    manageOperatorStation({ source: ss, range: sheet.getRange(CONFIG.OPERATOR_STATION.RANGES.BARCODE_INPUT) });
-    ss.toast("Sync Complete!", "Operator Station", 3);
-  } catch(e) {
-    ui.alert("Sync Error: " + e.toString());
-  }
+  processDynoFiles();
+  retroactiveLogRecalculate();
+  manageOperatorStation({ source: ss, range: sheet.getRange(CONFIG.OPERATOR_STATION.RANGES.BARCODE_INPUT) });
 }
 
 function safeAbsNum(val) {
@@ -106,50 +94,44 @@ function manageOperatorStation(e) {
   sheet.getRange(ranges.FILE_LINK_OUTPUT).setFormula('=HYPERLINK("' + file.getUrl() + '", "🔗 Open ' + realFileName + '")');   
   sheet.getRange(ranges.CACHED_FILE_ID).setValue(verifiedFileIdStr);  
     
-  try {  
-    var woSpreadsheet = SpreadsheetApp.openById(verifiedFileIdStr); 
-    var woSheet = woSpreadsheet.getSheets()[0];   
-    var woPartNumber = String(woSheet.getRange("D3").getValue()).trim(); 
-    var woBomRevision = String(woSheet.getRange("D4").getValue()).trim();   
-    
-    sheet.getRange(ranges.BOM_REV_OUTPUT).setValue(woBomRevision); 
-    sheet.getRange(ranges.PART_NO_OUTPUT).setValue(woPartNumber);   
-    sheet.getRange("C6").setValue(searchBarcode);
-    
-    var registrySheet = ss.getSheetByName(CONFIG.SHEET_NAMES.PROGRAM_REGISTRY);  
-    var matchedProgramName = "";
+  var woSpreadsheet = SpreadsheetApp.openById(verifiedFileIdStr); 
+  var woSheet = woSpreadsheet.getSheets()[0];   
+  var woPartNumber = String(woSheet.getRange("D3").getValue()).trim(); 
+  var woBomRevision = String(woSheet.getRange("D4").getValue()).trim();   
+  
+  sheet.getRange(ranges.BOM_REV_OUTPUT).setValue(woBomRevision); 
+  sheet.getRange(ranges.PART_NO_OUTPUT).setValue(woPartNumber);   
+  sheet.getRange("C6").setValue(searchBarcode);
+  
+  var registrySheet = ss.getSheetByName(CONFIG.SHEET_NAMES.PROGRAM_REGISTRY);  
+  var matchedProgramName = "";
 
-    if (registrySheet && woPartNumber) {  
-      var regValues = registrySheet.getDataRange().getValues();  
-      var cleanWoPart = cleanKey(woPartNumber);  
+  if (registrySheet && woPartNumber) {  
+    var regValues = registrySheet.getDataRange().getValues();  
+    var cleanWoPart = cleanKey(woPartNumber);  
+    
+    var regProgIdx = CONFIG.COLUMNS.PROGRAM_REGISTRY.PROGRAM_NAME - 1; 
+    var regBaseModelIdx = CONFIG.COLUMNS.PROGRAM_REGISTRY.BASE_MODEL - 1; 
+    
+    for (var rR = 1; rR < regValues.length; rR++) {  
+      var regRow = regValues[rR];
+      var regPartClean = cleanKey(regRow[regBaseModelIdx]);  
+      var regProgName = String(regRow[regProgIdx] || "").trim();  
       
-      var regProgIdx = CONFIG.COLUMNS.PROGRAM_REGISTRY.PROGRAM_NAME - 1; 
-      var regBaseModelIdx = CONFIG.COLUMNS.PROGRAM_REGISTRY.BASE_MODEL - 1; 
-      
-      for (var rR = 1; rR < regValues.length; rR++) {  
-        var regRow = regValues[rR];
-        var regPartClean = cleanKey(regRow[regBaseModelIdx]);  
-        var regProgName = String(regRow[regProgIdx] || "").trim();  
-        
-        if (regPartClean === cleanWoPart && regProgName) {  
-          matchedProgramName = regProgName;
-          sheet.getRange("C14").setValue(regRow[3] || ""); 
-          sheet.getRange("C15").setValue(regRow[4] || ""); 
-          sheet.getRange("C16").setValue(regRow[0] || ""); 
-          sheet.getRange("C17").setValue(regRow[6] || ""); 
-          sheet.getRange("C18").setValue(regRow[7] || ""); 
-          break;
-        }  
+      if (regPartClean === cleanWoPart && regProgName) {  
+        matchedProgramName = regProgName;
+        sheet.getRange("C14").setValue(regRow[3] || ""); 
+        sheet.getRange("C15").setValue(regRow[4] || ""); 
+        sheet.getRange("C16").setValue(regRow[0] || ""); 
+        sheet.getRange("C17").setValue(regRow[6] || ""); 
+        sheet.getRange("C18").setValue(regRow[7] || ""); 
+        break;
       }  
     }  
+  }  
 
-    populateSpecLimits(ss, sheet, matchedProgramName || woPartNumber);
-    renderOperatorTableWithFormatting(ss, sheet, searchBarcode, woPartNumber);
-
-  } catch(e) {
-    Logger.log("WO Lookup Error: " + e.toString());
-    throw new Error("Work Order Lookup Failed: " + e.message);
-  }
+  populateSpecLimits(ss, sheet, matchedProgramName || woPartNumber);
+  renderOperatorTableWithFormatting(ss, sheet, searchBarcode, woPartNumber);
 }  
 
 function populateSpecLimits(ss, sheet, programOrPart) {
