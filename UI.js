@@ -19,11 +19,35 @@ function clickMasterSyncButton() {
 }
 
 /**
- * Normalizes serial strings for fuzzy key matching (removes spaces, dashes, underscores, and case).
+ * Converts raw serial strings into standard XXXX-YYY format (e.g. "1654007" -> "1654-007").
+ */
+function formatSerialWithDash(raw) {
+  if (raw === null || raw === undefined) return "";
+  var str = String(raw).trim();
+  
+  // Match 4 digits followed by an optional separator and 3 digits (e.g. 1654007 or 1654-007)
+  var match = str.match(/(\d{4})[-_ ]?(\d{3})/);
+  if (match) {
+    return match[1] + "-" + match[2];
+  }
+  
+  // Fallback: Extract all digits, take last 7 digits, insert dash
+  var digits = str.replace(/\D/g, "");
+  if (digits.length >= 7) {
+    var last7 = digits.slice(-7);
+    return last7.slice(0, 4) + "-" + last7.slice(4);
+  }
+  
+  return str;
+}
+
+/**
+ * Normalizes serial strings for key matching.
  */
 function normalizeSerialKey(str) {
   if (str === null || str === undefined) return "";
-  return String(str).trim().toLowerCase().replace(/[^a-z0-9]/g, "");
+  var formatted = formatSerialWithDash(str);
+  return String(formatted).trim().toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
 /**
@@ -128,7 +152,7 @@ function manageOperatorStation(e) {
       // 3. Populate Limit Cells B22:F23 with absolute positive values
       populateSpecLimits(ss, sheet, matchedProgramName || woPartNumber);
 
-      // 4. Render dyno records using normalized key matching
+      // 4. Render dyno records using formatted dash serial matching
       renderOperatorTableWithWOAlignment(ss, sheet, woSheet, searchBarcode, woPartNumber);
 
     } catch(e) {
@@ -233,23 +257,28 @@ function getLogHeaderIndices(headerRow) {
 }
 
 /**
- * Extracts expected serials from the Work Order spreadsheet and matches against Master_Dyno_Log.
+ * Extracts serials from WO file, formats to XXXX-YYY, and cross-references Master_Dyno_Log.
  */
 function renderOperatorTableWithWOAlignment(ss, sheet, woSheet, searchBarcode, partNumber) {
   var ranges = CONFIG.OPERATOR_STATION.RANGES;
-  var normBarcode = normalizeSerialKey(searchBarcode);
+  var cleanBarcodeDigits = String(searchBarcode).replace(/\D/g, "");
 
-  // 1. Extract master serial list directly from the Work Order File
+  // 1. Extract and format master serial list directly from the Work Order File
   var woValues = woSheet.getDataRange().getValues();
   var woSerials = [];
 
   for (var r = 0; r < woValues.length; r++) {
     for (var c = 0; c < woValues[r].length; c++) {
       var cellVal = String(woValues[r][c] || "").trim();
-      var normCell = normalizeSerialKey(cellVal);
-      if (normBarcode !== "" && normCell.includes(normBarcode) && normCell !== normBarcode) {
-        if (!woSerials.includes(cellVal)) {
-          woSerials.push(cellVal);
+      if (!cellVal) continue;
+
+      var cellDigits = cellVal.replace(/\D/g, "");
+
+      // Match cells containing WO prefix digits and having unit serial length (7+ digits)
+      if (cleanBarcodeDigits !== "" && cellDigits.includes(cleanBarcodeDigits) && cellDigits.length >= 7) {
+        var formattedSerial = formatSerialWithDash(cellVal);
+        if (formattedSerial && formattedSerial !== searchBarcode && !woSerials.includes(formattedSerial)) {
+          woSerials.push(formattedSerial);
         }
       }
     }
@@ -306,9 +335,9 @@ function renderOperatorTableWithWOAlignment(ss, sheet, woSheet, searchBarcode, p
   var test2PassCount = 0;
   var test2FailCount = 0;
 
-  // 3. Build mapped rows by matching WO Serials against Normalized Log Keys
+  // 3. Build mapped rows matching formatted WO serials against normalized Log Keys
   for (var s = 0; s < woSerials.length; s++) {
-    var sNum = woSerials[s];
+    var sNum = woSerials[s]; // Formatted as XXXX-YYY
     var normSKey = normalizeSerialKey(sNum);
     var testRecord = latestTestsByNormKey[normSKey];
 
@@ -353,7 +382,7 @@ function renderOperatorTableWithWOAlignment(ss, sheet, woSheet, searchBarcode, p
       ];
       rowsToDisplay.push(mappedRow);
     } else {
-      // Un-tested unit: displays serial with blank data slots
+      // Un-tested unit: displays formatted serial with blank data slots
       rowsToDisplay.push([sNum, "", "", "", "", "", "", "", "", "", "", ""]);
     }
   }
