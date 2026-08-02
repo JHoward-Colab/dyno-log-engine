@@ -1,6 +1,6 @@
 // =========================================================================
 // 🖥️ USER INTERFACE & CONTROLLERS (UI.js)
-// Clean Baseline Script with Direct On-Screen Spec Limit Evaluation
+// Workspace Rendering, Button Actions & Triggers
 // =========================================================================
 
 function clickMasterSyncButton() {
@@ -179,16 +179,15 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber)
   var logSheetId = logSheet.getSheetId();
 
   // Read active spec limits DIRECTLY off the sheet display (B22:E23)
-  var limitValues = sheet.getRange("B22:E23").getValues();
   var limits = {
-    c1Min: Math.abs(parseFloat(limitValues[0][0])), // B22
-    c1Max: Math.abs(parseFloat(limitValues[1][0])), // B23
-    r1Min: Math.abs(parseFloat(limitValues[0][1])), // C22
-    r1Max: Math.abs(parseFloat(limitValues[1][1])), // C23
-    c2Min: Math.abs(parseFloat(limitValues[0][2])), // D22
-    c2Max: Math.abs(parseFloat(limitValues[1][2])), // D23
-    r2Min: Math.abs(parseFloat(limitValues[0][3])), // E22
-    r2Max: Math.abs(parseFloat(limitValues[1][3]))  // E23
+    c1Min: Math.abs(parseFloat(sheet.getRange(ranges.LIMIT_C1_MIN).getValue())),
+    c1Max: Math.abs(parseFloat(sheet.getRange(ranges.LIMIT_C1_MAX).getValue())),
+    r1Min: Math.abs(parseFloat(sheet.getRange(ranges.LIMIT_R1_MIN).getValue())),
+    r1Max: Math.abs(parseFloat(sheet.getRange(ranges.LIMIT_R1_MAX).getValue())),
+    c2Min: Math.abs(parseFloat(sheet.getRange(ranges.LIMIT_C2_MIN).getValue())),
+    c2Max: Math.abs(parseFloat(sheet.getRange(ranges.LIMIT_C2_MAX).getValue())),
+    r2Min: Math.abs(parseFloat(sheet.getRange(ranges.LIMIT_R2_MIN).getValue())),
+    r2Max: Math.abs(parseFloat(sheet.getRange(ranges.LIMIT_R2_MAX).getValue()))
   };
 
   var cleanBarcodeStr = cleanKey(searchBarcode);
@@ -198,8 +197,8 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber)
 
   for (var r = 1; r < logData.length; r++) {
     var row = logData[r];
-    var trueSerial = String(row[logCols.TRUE_SERIAL - 1] || "").trim();
-    var baseModel = cleanKey(row[logCols.BASE_MODEL - 1]);
+    var trueSerial = String(row[logCols.TRUE_SERIAL - 1] || "").trim(); // Col C (3)
+    var baseModel = cleanKey(row[logCols.BASE_MODEL - 1]);             // Col D (4)
     var cleanSerial = cleanKey(trueSerial);
 
     var isMatch = false;
@@ -235,28 +234,28 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber)
     var rowLink = "#gid=" + logSheetId + "&range=A" + actualSheetRow;
     var serialHyperlinkFormula = '=HYPERLINK("' + rowLink + '", "' + trueSerial + '")';
 
-    var t1Status = String(row[logCols.TEST_1_STATUS - 1] || "").trim();
-    var t2Status = String(row[logCols.TEST_2_STATUS - 1] || "").trim();
+    var t1Status = String(row[logCols.TEST_1_STATUS - 1] || "").trim(); // Col V (22)
+    var t2Status = String(row[logCols.TEST_2_STATUS - 1] || "").trim(); // Col W (23)
 
     if (t1Status.toUpperCase().includes("FAIL")) test1FailCount++;
     if (t2Status.toUpperCase().includes("FAIL")) test2FailCount++;
 
-    var overallStat = String(row[logCols.OVERALL_STATUS - 1] || "").trim();
-    var evalAction  = String(row[logCols.EVALUATION_ACTION - 1] || "").trim();
+    var overallStat = String(row[logCols.OVERALL_STATUS - 1] || "").trim();   // Col X (24)
+    var evalAction  = String(row[logCols.EVALUATION_ACTION - 1] || "").trim(); // Col Z (26)
 
     var mappedRow = [
-      serialHyperlinkFormula,                          // Col A (1)
-      safeAbsNum(row[logCols.ROD_FORCE - 1]),          // Col B (2)
-      safeAbsNum(row[logCols.COMP_1 - 1]),             // Col C (3)
-      safeAbsNum(row[logCols.REB_1 - 1]),              // Col D (4)
-      safeAbsNum(row[logCols.COMP_2 - 1]),             // Col E (5)
-      safeAbsNum(row[logCols.REB_2 - 1]),              // Col F (6)
-      t1Status,                                        // Col G (7)
-      t2Status,                                        // Col H (8)
-      overallStat,                                     // Col I (9)
-      evalAction,                                      // Col J (10)
-      safeAbsNum(row[logCols.COMP_3 - 1]),             // Col K (11)
-      safeAbsNum(row[logCols.REB_3 - 1])               // Col L (12)
+      serialHyperlinkFormula,                          // Col A (1): Serial
+      safeAbsNum(row[logCols.ROD_FORCE - 1]),          // Col B (2): Rod Force (Col F/6)
+      safeAbsNum(row[logCols.COMP_1 - 1]),             // Col C (3): Comp 1 (Col H/8)
+      safeAbsNum(row[logCols.REB_1 - 1]),              // Col D (4): Reb 1 (Col I/9)
+      safeAbsNum(row[logCols.COMP_2 - 1]),             // Col E (5): Comp 2 (Col M/13)
+      safeAbsNum(row[logCols.REB_2 - 1]),              // Col F (6): Reb 2 (Col N/14)
+      t1Status,                                        // Col G (7): Test 1 Status (Col V/22)
+      t2Status,                                        // Col H (8): Test 2 Status (Col W/23)
+      overallStat,                                     // Col I (9): Overall Status (Col X/24)
+      evalAction,                                      // Col J (10): Evaluation Action (Col Z/26)
+      safeAbsNum(row[logCols.COMP_3 - 1]),             // Col K (11): Comp 3 (Col R/18)
+      safeAbsNum(row[logCols.REB_3 - 1])               // Col L (12): Reb 3 (Col S/19)
     ];
 
     rowsToDisplay.push(mappedRow);
@@ -303,10 +302,10 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber)
       var isOut = false;
 
       if (!isNaN(val)) {
-        if (cIdx === 2 && ((!isNaN(limits.c1Min) && val < limits.c1Min) || (!isNaN(limits.c1Max) && val > limits.c1Max))) isOut = true;
-        if (cIdx === 3 && ((!isNaN(limits.r1Min) && val < limits.r1Min) || (!isNaN(limits.r1Max) && val > limits.r1Max))) isOut = true;
-        if (cIdx === 4 && ((!isNaN(limits.c2Min) && val < limits.c2Min) || (!isNaN(limits.c2Max) && val > limits.c2Max))) isOut = true;
-        if (cIdx === 5 && ((!isNaN(limits.r2Min) && val < limits.r2Min) || (!isNaN(limits.r2Max) && val > limits.r2Max))) isOut = true;
+        if (cIdx === 2 && ((!isNaN(limits.c1Min) && val < limits.c1Min) || (!isNaN(limits.c1Max) && val > limits.c1Max))) isOut = true; // Col C
+        if (cIdx === 3 && ((!isNaN(limits.r1Min) && val < limits.r1Min) || (!isNaN(limits.r1Max) && val > limits.r1Max))) isOut = true; // Col D
+        if (cIdx === 4 && ((!isNaN(limits.c2Min) && val < limits.c2Min) || (!isNaN(limits.c2Max) && val > limits.c2Max))) isOut = true; // Col E
+        if (cIdx === 5 && ((!isNaN(limits.r2Min) && val < limits.r2Min) || (!isNaN(limits.r2Max) && val > limits.r2Max))) isOut = true; // Col F
       }
 
       if ((cIdx === 6 || cIdx === 7 || cIdx === 8) && strVal.includes("FAIL")) {
