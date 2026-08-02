@@ -1,6 +1,6 @@
 // =========================================================================
-// ⚙️ GLOBAL CONFIGURATION & CONSTANTS (Config.js)
-// Single Source of Truth for Sheet Names, Ranges, and Column Mappings
+// ⚙️ CONFIGURATION (Config.js)
+// Clean Baseline Configuration
 // =========================================================================
 
 const CONFIG = Object.freeze({
@@ -11,7 +11,6 @@ const CONFIG = Object.freeze({
     PROGRAM_REGISTRY: "Program_Registry"
   }),
 
-  // 🔒 DEV-SAFE FOLDER TARGETS
   FOLDERS: Object.freeze({
     WATCH_FOLDER: "01_Watch_Folder_DEV",
     ARCHIVE_FOLDER: "02_Archive_DEV"
@@ -66,9 +65,9 @@ const CONFIG = Object.freeze({
       TEST_1_STATUS: 22,    // Col V
       TEST_2_STATUS: 23,    // Col W
       OVERALL_STATUS: 24,   // Col X
-      DIAGNOSTICS: 25,      // Col Y (Diagnostics & Troubleshooting)
-      EVALUATION_ACTION: 26,// Col Z (Evaluation Action)
-      ENG_COMMENTS: 27      // Col AA (Diagnostic Notes)
+      DIAGNOSTICS: 25,      // Col Y
+      EVALUATION_ACTION: 26,// Col Z
+      ENG_COMMENTS: 27      // Col AA
     }),
 
     PART_REFERENCE_MATRIX: Object.freeze({
@@ -96,10 +95,5 @@ const CONFIG = Object.freeze({
     PASS: "PASS", FAIL: "FAIL", FAIL_BLUEPRINT: "FAIL (BLUEPRINT)",
     FAIL_OUTLIER: "FAIL (OUTLIER)", OVERRIDE_PASS: "PASS (OVERRIDE)",
     INITIALIZING: "INITIALIZING", NOT_RUN: "NOT RUN", NOT_TESTED: "NOT TESTED YET"
-  }),
-
-  DIAGNOSTIC_TAGS: Object.freeze({
-    ROD_FORCE_FAIL: "[RF_FAIL]", COMP_1_FAIL: "[C1_FAIL]", REB_1_FAIL: "[R1_FAIL]",
-    COMP_2_FAIL: "[C2_FAIL]", REB_2_FAIL: "[R2_FAIL]", SLOPE_FAIL: "[SLOPE_FAIL]"
   })
 });
