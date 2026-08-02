@@ -43,6 +43,7 @@ function manageOperatorStation(e) {
     // 1. Clear Value Cells Only (Preserving static label cells A14:A18)
     sheet.getRange(ranges.CLEAR_METADATA_RANGE).clearContent(); 
     sheet.getRange("C6").clearContent(); 
+    sheet.getRange("A8").clearContent(); // Work Order Status Cell
     sheet.getRange("C14:C18").clearContent();  
     sheet.getRange("E14:E18").clearContent();  
     sheet.getRange("B22:F23").clearContent();
@@ -64,6 +65,7 @@ function manageOperatorStation(e) {
     if (!files.hasNext()) { 
       sheet.getRange(ranges.FILE_LINK_OUTPUT).setValue("❌ Work Order File Not Found: " + searchBarcode); 
       sheet.getRange("C6").setValue("CROSS-CHECK FAILED");
+      sheet.getRange("A8").setValue("WORK ORDER FILE NOT FOUND");
       return; 
     }  
     
@@ -93,8 +95,8 @@ function manageOperatorStation(e) {
         var regValues = registrySheet.getDataRange().getValues();  
         var cleanWoPart = woPartNumber.toLowerCase().replace(/[-_\s]/g, "");  
         
-        var regProgIdx = CONFIG.COLUMNS.PROGRAM_REGISTRY.PROGRAM_NAME - 1; // Col A (0)
-        var regBaseModelIdx = CONFIG.COLUMNS.PROGRAM_REGISTRY.BASE_MODEL - 1; // Col C (2)
+        var regProgIdx = CONFIG.COLUMNS.PROGRAM_REGISTRY.PROGRAM_NAME - 1; 
+        var regBaseModelIdx = CONFIG.COLUMNS.PROGRAM_REGISTRY.BASE_MODEL - 1; 
         
         for (var rR = 1; rR < regValues.length; rR++) {  
           var regRow = regValues[rR];
@@ -178,15 +180,18 @@ function populateSpecLimits(ss, sheet, programOrPart) {
 
 /**
  * Queries Master_Dyno_Log directly for records matching the scanned barcode prefix.
- * Maps raw log columns to Operator Station 12-column layout, formats forces with ABS and 0.0,
- * and applies out-of-spec red highlighting.
+ * Maps raw log columns to Operator Station 12-column layout, formats forces with ABS,
+ * maps Col V & W to Col G & H, and updates cell A8 Work Order status.
  */
 function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber) {
   var logSheet = ss.getSheetByName(CONFIG.SHEET_NAMES.MASTER_DYNO_LOG);
   if (!logSheet) return;
 
   var logData = logSheet.getDataRange().getValues();
-  if (logData.length <= 1) return;
+  if (logData.length <= 1) {
+    sheet.getRange("A8").setValue("PENDING TESTING");
+    return;
+  }
 
   var logCols = CONFIG.COLUMNS.MASTER_DYNO_LOG;
   var ranges = CONFIG.OPERATOR_STATION.RANGES;
@@ -207,6 +212,14 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber)
   var cleanPart = String(partNumber).trim().toLowerCase();
 
   var rowsToDisplay = [];
+  var test1PassCount = 0;
+  var test1FailCount = 0;
+  var test2PassCount = 0;
+  var test2FailCount = 0;
+
+  // Determine Col V (22) and Col W (23) column indices (0-indexed)
+  var colTest1Idx = (logCols && logCols.TEST_1_STATUS) ? (logCols.TEST_1_STATUS - 1) : 21; // Col V
+  var colTest2Idx = (logCols && logCols.TEST_2_STATUS) ? (logCols.TEST_2_STATUS - 1) : 22; // Col W
 
   for (var r = 1; r < logData.length; r++) {
     var row = logData[r];
@@ -227,6 +240,16 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber)
       var rowLink = "#gid=" + logSheetId + "&range=A" + actualSheetRow;
       var serialHyperlinkFormula = '=HYPERLINK("' + rowLink + '", "' + trueSerial + '")';
 
+      // Pull Test 1 & Test 2 Statuses directly from Col V & W
+      var t1Status = String(row[colTest1Idx] || "").trim();
+      var t2Status = String(row[colTest2Idx] || "").trim();
+
+      if (t1Status.toUpperCase() === "PASS") test1PassCount++;
+      else if (t1Status.toUpperCase() === "FAIL") test1FailCount++;
+
+      if (t2Status.toUpperCase() === "PASS") test2PassCount++;
+      else if (t2Status.toUpperCase() === "FAIL") test2FailCount++;
+
       // Status combinations
       var overallStat = String(row[logCols.OVERALL_STATUS - 1] || "").trim();
       var teardownAct = String(row[logCols.TEARDOWN_ACTION - 1] || "").trim();
@@ -237,6 +260,7 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber)
       var diagCombo = diagNotes + (engComm ? " | " + engComm : "");
 
       // 12-COLUMN TABLE MAPPING
+      // Col G (7) = Test 1 Status (Col V), Col H (8) = Test 2 Status (Col W)
       var mappedRow = [
         serialHyperlinkFormula,                     // Col A (1): True Serial (Hyperlink)
         safeAbsNum(row[logCols.ROD_FORCE - 1]),     // Col B (2): Rod Force (ABS)
@@ -244,10 +268,10 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber)
         safeAbsNum(row[logCols.REB_1 - 1]),         // Col D (4): Low Speed Reb (ABS)
         safeAbsNum(row[logCols.COMP_2 - 1]),        // Col E (5): Med Speed Comp (ABS)
         safeAbsNum(row[logCols.REB_2 - 1]),         // Col F (6): Med Speed Reb (ABS)
-        safeAbsNum(row[logCols.COMP_3 - 1]),        // Col G (7): High Speed Comp (ABS)
-        safeAbsNum(row[logCols.REB_3 - 1]),         // Col H (8): High Speed Reb (ABS)
-        row[logCols.TEST_1_STATUS - 1] || "",       // Col I (9): Test 1 Status
-        row[logCols.TEST_2_STATUS - 1] || "",       // Col J (10): Test 2 Status
+        t1Status,                                   // Col G (7): Test 1 Status (Log Col V)
+        t2Status,                                   // Col H (8): Test 2 Status (Log Col W)
+        safeAbsNum(row[logCols.COMP_3 - 1]),        // Col I (9): High Speed Comp (ABS)
+        safeAbsNum(row[logCols.REB_3 - 1]),         // Col J (10): High Speed Reb (ABS)
         evalActionCombo,                            // Col K (11): Overall Status / Eval Action
         diagCombo                                   // Col L (12): Diagnostic Notes
       ];
@@ -255,6 +279,22 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber)
       rowsToDisplay.push(mappedRow);
     }
   }
+
+  // Evaluate Cell A8 Work Order Status
+  var statusMessage = "";
+  if (rowsToDisplay.length === 0) {
+    statusMessage = "PENDING TESTING";
+  } else if (test1FailCount > 0) {
+    statusMessage = "ACTION REQUIRED: Test 1 Failure Detected (" + test1FailCount + " unit(s))";
+  } else if (test2FailCount > 0) {
+    statusMessage = "CONDITIONAL PASS: Attention Required (Test 2 Outlier Detected)";
+  } else if (test1FailCount === 0 && test2FailCount === 0) {
+    statusMessage = "WORK ORDER COMPLETED AND PASSING";
+  } else {
+    statusMessage = "IN PROGRESS: " + rowsToDisplay.length + " Units Logged";
+  }
+
+  sheet.getRange("A8").setValue(statusMessage);
 
   if (rowsToDisplay.length === 0) return;
 
@@ -266,9 +306,9 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber)
   // 1. Write Mapped Data Values & Formulas
   outputRange.setValues(rowsToDisplay);
 
-  // 2. Set Decimal Formatting (X.X format on force columns B through H)
-  var numericSubRange = sheet.getRange(startRow, 2, numRows, 7);
-  numericSubRange.setNumberFormat("0.0");
+  // 2. Set Decimal Formatting (X.X format on force columns B..F and I..J, skipping G & H)
+  sheet.getRange(startRow, 2, numRows, 5).setNumberFormat("0.0"); // Cols B..F
+  sheet.getRange(startRow, 9, numRows, 2).setNumberFormat("0.0"); // Cols I..J
 
   // 3. Build Formatting Arrays for Batch Highlighting
   var bgColors = [];
