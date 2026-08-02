@@ -28,6 +28,14 @@ function safeAbsNum(val) {
 }
 
 /**
+ * Normalizes string keys by stripping all non-alphanumeric characters and lowercasing.
+ */
+function cleanKey(val) {
+  if (val === null || val === undefined) return "";
+  return String(val).toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+/**
  * Sets cell A8 text and dynamically formats background & text color based on the status.
  */
 function setA8Status(sheet, statusMessage) {
@@ -75,7 +83,7 @@ function manageOperatorStation(e) {
     // 2. Clear Results Table & Formatting (A27:L100)
     var tableRange = sheet.getRange(ranges.CLEAR_RESULTS_RANGE);   
     tableRange.clearContent();   
-    tableRange.setBackground(null).setFontColor(null).setFontWeight("normal");   
+    tableRange.setBackground("#FFFFFF").setFontColor("#000000").setFontWeight("normal");   
 
     if (!barcode || barcode === "undefined" || barcode === "null") return;  
       
@@ -117,14 +125,14 @@ function manageOperatorStation(e) {
 
       if (registrySheet && woPartNumber) {  
         var regValues = registrySheet.getDataRange().getValues();  
-        var cleanWoPart = woPartNumber.toLowerCase().replace(/[-_\s]/g, "");  
+        var cleanWoPart = cleanKey(woPartNumber);  
         
         var regProgIdx = CONFIG.COLUMNS.PROGRAM_REGISTRY.PROGRAM_NAME - 1; 
         var regBaseModelIdx = CONFIG.COLUMNS.PROGRAM_REGISTRY.BASE_MODEL - 1; 
         
         for (var rR = 1; rR < regValues.length; rR++) {  
           var regRow = regValues[rR];
-          var regPartClean = String(regRow[regBaseModelIdx] || "").trim().toLowerCase().replace(/[-_\s]/g, "");  
+          var regPartClean = cleanKey(regRow[regBaseModelIdx]);  
           var regProgName = String(regRow[regProgIdx] || "").trim();  
           
           if (regPartClean === cleanWoPart && regProgName) {  
@@ -154,7 +162,7 @@ function manageOperatorStation(e) {
 }  
 
 /**
- * Populates spec limit cells (B22:F23) with positive absolute values.
+ * Populates spec limit cells (B22:F23) with positive absolute values using clean key matching.
  */
 function populateSpecLimits(ss, sheet, programOrPart) {
   var refSheet = ss.getSheetByName(CONFIG.SHEET_NAMES.PART_REFERENCE_MATRIX);
@@ -162,12 +170,12 @@ function populateSpecLimits(ss, sheet, programOrPart) {
 
   var refData = refSheet.getDataRange().getValues();
   var refCols = CONFIG.COLUMNS.PART_REFERENCE_MATRIX;
-  var cleanKey = String(programOrPart).trim().toLowerCase();
+  var targetCleanKey = cleanKey(programOrPart);
 
   var refRow = null;
   for (var i = 1; i < refData.length; i++) {
-    var progName = String(refData[i][refCols.PROGRAM_NAME - 1] || "").trim().toLowerCase();
-    if (progName === cleanKey) {
+    var progName = cleanKey(refData[i][refCols.PROGRAM_NAME - 1]);
+    if (progName === targetCleanKey || progName.includes(targetCleanKey) || targetCleanKey.includes(progName)) {
       refRow = refData[i];
       break;
     }
@@ -178,9 +186,10 @@ function populateSpecLimits(ss, sheet, programOrPart) {
   var ranges = CONFIG.OPERATOR_STATION.RANGES;
 
   function getAbsPair(minVal, maxVal) {
-    if (minVal === "" || maxVal === "") return { min: "", max: "" };
+    if (minVal === "" || maxVal === "" || minVal === null || maxVal === null) return { min: "", max: "" };
     var a = Math.abs(parseFloat(minVal));
     var b = Math.abs(parseFloat(maxVal));
+    if (isNaN(a) || isNaN(b)) return { min: "", max: "" };
     return { min: Math.min(a, b), max: Math.max(a, b) };
   }
 
@@ -232,8 +241,8 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber)
   var r2Min = parseFloat(sheet.getRange(ranges.LIMIT_R2_MIN).getValue());
   var r2Max = parseFloat(sheet.getRange(ranges.LIMIT_R2_MAX).getValue());
 
-  var cleanBarcode = String(searchBarcode).trim().toLowerCase();
-  var cleanPart = String(partNumber).trim().toLowerCase();
+  var cleanBarcodeStr = cleanKey(searchBarcode);
+  var cleanPartStr = cleanKey(partNumber);
 
   // Determine Col V (22) and Col W (23) column indices (0-indexed)
   var colTest1Idx = (logCols && logCols.TEST_1_STATUS) ? (logCols.TEST_1_STATUS - 1) : 21; // Col V
@@ -245,17 +254,18 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber)
   for (var r = 1; r < logData.length; r++) {
     var row = logData[r];
     var trueSerial = String(row[logCols.TRUE_SERIAL - 1] || "").trim();
-    var baseModel = String(row[logCols.BASE_MODEL - 1] || "").trim().toLowerCase();
+    var baseModel = cleanKey(row[logCols.BASE_MODEL - 1]);
+    var cleanSerial = cleanKey(trueSerial);
 
     var isMatch = false;
-    if (cleanBarcode !== "" && trueSerial.toLowerCase().includes(cleanBarcode)) {
+    if (cleanBarcodeStr !== "" && cleanSerial.includes(cleanBarcodeStr)) {
       isMatch = true;
-    } else if (cleanPart !== "" && baseModel === cleanPart && (cleanBarcode === "" || cleanBarcode === "undefined")) {
+    } else if (cleanPartStr !== "" && baseModel === cleanPartStr && (cleanBarcodeStr === "" || cleanBarcodeStr === "undefined")) {
       isMatch = true;
     }
 
     if (isMatch && trueSerial !== "") {
-      latestLogBySerial[trueSerial.toLowerCase()] = {
+      latestLogBySerial[cleanSerial] = {
         rowIdx: r + 1,
         data: row,
         trueSerial: trueSerial
@@ -267,8 +277,14 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber)
   var test1FailCount = 0;
   var test2FailCount = 0;
 
-  // Sort serials sequentially
-  var serialKeys = Object.keys(latestLogBySerial).sort();
+  // Natural numeric sort on unit suffixes (e.g. 1522-001, 1522-006, 1522-009, 1522-015)
+  var serialKeys = Object.keys(latestLogBySerial).sort(function(a, b) {
+    var mA = a.match(/(\d+)$/);
+    var mB = b.match(/(\d+)$/);
+    var uA = mA ? parseInt(mA[1], 10) : 0;
+    var uB = mB ? parseInt(mB[1], 10) : 0;
+    return uA - uB;
+  });
 
   // 2. Second Pass: Build table rows and evaluate test outcomes
   for (var k = 0; k < serialKeys.length; k++) {
@@ -349,7 +365,7 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber)
   sheet.getRange(startRow, 2, numRows, 5).setNumberFormat("0.0"); // Cols B..F
   sheet.getRange(startRow, 9, numRows, 2).setNumberFormat("0.0"); // Cols I..J
 
-  // 6. Build Formatting Arrays for Batch Highlighting (Failed forces -> RED BOLD)
+  // 6. Build Explicit Formatting Arrays (Failed forces -> BOLD Dark Red on Light Red, Passed -> Normal Black on White)
   var bgColors = [];
   var fontColors = [];
   var fontWeights = [];
@@ -367,10 +383,10 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber)
 
       // Evaluate numeric force columns against active spec limits
       if (!isNaN(val)) {
-        if (cIdx === 2 && ((!isNaN(c1Min) && val < c1Min) || (!isNaN(c1Max) && val > c1Max))) isOut = true; // Low Comp
-        if (cIdx === 3 && ((!isNaN(r1Min) && val < r1Min) || (!isNaN(r1Max) && val > r1Max))) isOut = true; // Low Reb
-        if (cIdx === 4 && ((!isNaN(c2Min) && val < c2Min) || (!isNaN(c2Max) && val > c2Max))) isOut = true; // Med Comp
-        if (cIdx === 5 && ((!isNaN(r2Min) && val < r2Min) || (!isNaN(r2Max) && val > r2Max))) isOut = true; // Med Reb
+        if (cIdx === 2 && ((!isNaN(c1Min) && val < c1Min) || (!isNaN(c1Max) && val > c1Max))) isOut = true; // Low Comp (Col C)
+        if (cIdx === 3 && ((!isNaN(r1Min) && val < r1Min) || (!isNaN(r1Max) && val > r1Max))) isOut = true; // Low Reb (Col D)
+        if (cIdx === 4 && ((!isNaN(c2Min) && val < c2Min) || (!isNaN(c2Max) && val > c2Max))) isOut = true; // Med Comp (Col E)
+        if (cIdx === 5 && ((!isNaN(r2Min) && val < r2Min) || (!isNaN(r2Max) && val > r2Max))) isOut = true; // Med Reb (Col F)
       }
 
       // Evaluate status text columns (Cols G and H)
@@ -383,8 +399,8 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber)
         rowFont.push("#990000"); // Dark Red Text
         rowWeight.push("bold");  // BOLD font for failing values
       } else {
-        rowBg.push(null);        
-        rowFont.push(null);
+        rowBg.push("#FFFFFF");   // Clean White Background
+        rowFont.push("#000000"); // Black Text
         rowWeight.push("normal");
       }
     }
@@ -393,6 +409,6 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber)
     fontWeights.push(rowWeight);
   }
 
-  // 7. Batch apply background, text formatting, and font weights in a single API call
+  // 7. Apply explicit formatting matrices in a single API call
   outputRange.setBackgrounds(bgColors).setFontColors(fontColors).setFontWeights(fontWeights);
 }
