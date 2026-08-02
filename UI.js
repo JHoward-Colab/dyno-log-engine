@@ -19,6 +19,15 @@ function clickMasterSyncButton() {
 }
 
 /**
+ * Helper to safely extract positive absolute numbers formatted or null.
+ */
+function safeAbsNum(val) {
+  if (val === "" || val === null || val === undefined) return "";
+  var n = parseFloat(val);
+  return isNaN(n) ? val : Math.abs(n);
+}
+
+/**
  * Operator Station Event Manager for Barcode Scanning & Work Order Lookup.
  */
 function manageOperatorStation(e) {
@@ -31,7 +40,7 @@ function manageOperatorStation(e) {
   var barcode = String(sheet.getRange(ranges.BARCODE_INPUT).getValue()).trim();  
     
   if (range.getA1Notation() === ranges.BARCODE_INPUT) {  
-    // 1. Clear Header Metadata Area (Value cells only, preserving static column A/E labels)
+    // 1. Clear Value Cells Only (Preserving static label cells A14:A18)
     sheet.getRange(ranges.CLEAR_METADATA_RANGE).clearContent(); 
     sheet.getRange("C6").clearContent(); 
     sheet.getRange("C14:C18").clearContent();  
@@ -74,7 +83,7 @@ function manageOperatorStation(e) {
       sheet.getRange(ranges.BOM_REV_OUTPUT).setValue(woBomRevision); 
       sheet.getRange(ranges.PART_NO_OUTPUT).setValue(woPartNumber);   
 
-      // ✅ RESTORED: Cell C6 Cross-Check Verification
+      // Cell C6 Cross-Check Verification
       sheet.getRange("C6").setValue(searchBarcode);
       
       var registrySheet = ss.getSheetByName(CONFIG.SHEET_NAMES.PROGRAM_REGISTRY);  
@@ -84,26 +93,32 @@ function manageOperatorStation(e) {
         var regValues = registrySheet.getDataRange().getValues();  
         var cleanWoPart = woPartNumber.toLowerCase().replace(/[-_\s]/g, "");  
         
-        var regProgIdx = CONFIG.COLUMNS.PROGRAM_REGISTRY.PROGRAM_NAME - 1;
-        var regBaseModelIdx = CONFIG.COLUMNS.PROGRAM_REGISTRY.BASE_MODEL - 1;
+        var regProgIdx = CONFIG.COLUMNS.PROGRAM_REGISTRY.PROGRAM_NAME - 1; // Col A (0)
+        var regBaseModelIdx = CONFIG.COLUMNS.PROGRAM_REGISTRY.BASE_MODEL - 1; // Col C (2)
         
         for (var rR = 1; rR < regValues.length; rR++) {  
-          var regPartClean = String(regValues[rR][regBaseModelIdx] || "").trim().toLowerCase().replace(/[-_\s]/g, "");  
-          var regProgName = String(regValues[rR][regProgIdx] || "").trim();  
+          var regRow = regValues[rR];
+          var regPartClean = String(regRow[regBaseModelIdx] || "").trim().toLowerCase().replace(/[-_\s]/g, "");  
+          var regProgName = String(regRow[regProgIdx] || "").trim();  
           
           if (regPartClean === cleanWoPart && regProgName) {  
             matchedProgramName = regProgName;
-            sheet.getRange(ranges.PROGRAM_NAME_OUTPUT).setValue(regProgName);  
-            sheet.getRange("E16").setValue(regProgName);
+            
+            // ✅ EXACT METADATA PANEL POPULATION (C14:C18)
+            sheet.getRange("C14").setValue(regRow[3] || ""); // Col D: Customer Account
+            sheet.getRange("C15").setValue(regRow[4] || ""); // Col E: Vehicle/Model Spec
+            sheet.getRange("C16").setValue(regRow[0] || ""); // Col A: LABA7 Program Name
+            sheet.getRange("C17").setValue(regRow[6] || ""); // Col G: Target Valving Spec
+            sheet.getRange("C18").setValue(regRow[7] || ""); // Col H: Required Clicker Targets
             break;
           }  
         }  
       }  
 
-      // 3. Populate Limit Cells B22:F23 & Summary Values
+      // 3. Populate Limit Cells B22:F23 with absolute positive values
       populateSpecLimits(ss, sheet, matchedProgramName || woPartNumber);
 
-      // 4. Render dyno records with hyperlinks, X.X formatting & out-of-spec highlighting
+      // 4. Render dyno records with hyperlinks, ABS formatting & out-of-spec highlighting
       renderOperatorTableWithFormatting(ss, sheet, searchBarcode, woPartNumber);
 
     } catch(e) {
@@ -113,7 +128,7 @@ function manageOperatorStation(e) {
 }  
 
 /**
- * Populates spec limit cells (B22:F23) from Part_Reference_Matrix.
+ * Populates spec limit cells (B22:F23) with positive absolute values.
  */
 function populateSpecLimits(ss, sheet, programOrPart) {
   var refSheet = ss.getSheetByName(CONFIG.SHEET_NAMES.PART_REFERENCE_MATRIX);
@@ -135,22 +150,36 @@ function populateSpecLimits(ss, sheet, programOrPart) {
   if (!refRow) return;
 
   var ranges = CONFIG.OPERATOR_STATION.RANGES;
-  sheet.getRange(ranges.LIMIT_C1_MIN).setValue(refRow[refCols.COMP_1_MIN - 1]);
-  sheet.getRange(ranges.LIMIT_C1_MAX).setValue(refRow[refCols.COMP_1_MAX - 1]);
-  sheet.getRange(ranges.LIMIT_R1_MIN).setValue(refRow[refCols.REB_1_MIN - 1]);
-  sheet.getRange(ranges.LIMIT_R1_MAX).setValue(refRow[refCols.REB_1_MAX - 1]);
 
-  sheet.getRange(ranges.LIMIT_C2_MIN).setValue(refRow[refCols.COMP_2_MIN - 1]);
-  sheet.getRange(ranges.LIMIT_C2_MAX).setValue(refRow[refCols.COMP_2_MAX - 1]);
-  sheet.getRange(ranges.LIMIT_R2_MIN).setValue(refRow[refCols.REB_2_MIN - 1]);
-  sheet.getRange(ranges.LIMIT_R2_MAX).setValue(refRow[refCols.REB_2_MAX - 1]);
+  // Convert limit pairs to positive ABS bounds ensuring min <= max
+  function getAbsPair(minVal, maxVal) {
+    if (minVal === "" || maxVal === "") return { min: "", max: "" };
+    var a = Math.abs(parseFloat(minVal));
+    var b = Math.abs(parseFloat(maxVal));
+    return { min: Math.min(a, b), max: Math.max(a, b) };
+  }
 
-  sheet.getRange(ranges.LIMIT_SLOPE).setValue(refRow[refCols.SLOPE_1_MIN - 1]);
+  var c1 = getAbsPair(refRow[refCols.COMP_1_MIN - 1], refRow[refCols.COMP_1_MAX - 1]);
+  var r1 = getAbsPair(refRow[refCols.REB_1_MIN - 1], refRow[refCols.REB_1_MAX - 1]);
+  var c2 = getAbsPair(refRow[refCols.COMP_2_MIN - 1], refRow[refCols.COMP_2_MAX - 1]);
+  var r2 = getAbsPair(refRow[refCols.REB_2_MIN - 1], refRow[refCols.REB_2_MAX - 1]);
+
+  sheet.getRange(ranges.LIMIT_C1_MIN).setValue(c1.min);
+  sheet.getRange(ranges.LIMIT_C1_MAX).setValue(c1.max);
+  sheet.getRange(ranges.LIMIT_R1_MIN).setValue(r1.min);
+  sheet.getRange(ranges.LIMIT_R1_MAX).setValue(r1.max);
+
+  sheet.getRange(ranges.LIMIT_C2_MIN).setValue(c2.min);
+  sheet.getRange(ranges.LIMIT_C2_MAX).setValue(c2.max);
+  sheet.getRange(ranges.LIMIT_R2_MIN).setValue(r2.min);
+  sheet.getRange(ranges.LIMIT_R2_MAX).setValue(r2.max);
+
+  sheet.getRange(ranges.LIMIT_SLOPE).setValue(safeAbsNum(refRow[refCols.SLOPE_1_MIN - 1]));
 }
 
 /**
- * Renders dyno log rows filtered by Work Order / Serial Prefix, creating clickable 
- * hyperlinks back to Master_Dyno_Log, formatting to X.X, and applying out-of-spec red highlighting.
+ * Renders dyno log rows filtered by Work Order / Serial Prefix, converting all 
+ * forces using ABS, formatting to X.X, and applying out-of-spec red highlighting.
  */
 function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber) {
   var logSheet = ss.getSheetByName(CONFIG.SHEET_NAMES.MASTER_DYNO_LOG);
@@ -178,7 +207,6 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber)
   var cleanPart = String(partNumber).trim().toLowerCase();
 
   var rowsToDisplay = [];
-  var rawRowIndexMap = []; // Tracks actual row index on Master_Dyno_Log
 
   for (var r = 1; r < logData.length; r++) {
     var row = logData[r];
@@ -194,29 +222,38 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber)
     }
 
     if (isMatch) {
-      // ✅ HYPERLINK TO LINE ENTRY: Jump to exact row on Master_Dyno_Log
-      var actualSheetRow = r + 1; // 1-based row index in sheet
+      // Hyperlink jumping to exact row on Master_Dyno_Log
+      var actualSheetRow = r + 1;
       var rowLink = "#gid=" + logSheetId + "&range=A" + actualSheetRow;
       var serialHyperlinkFormula = '=HYPERLINK("' + rowLink + '", "' + trueSerial + '")';
 
-      // Map raw log columns to Operator Station 12-column table layout
+      // Combine Overall Status and Teardown / Evaluation Action
+      var overallStat = String(row[logCols.OVERALL_STATUS - 1] || "").trim();
+      var teardownAct = String(row[logCols.TEARDOWN_ACTION - 1] || "").trim();
+      var evalActionCombo = overallStat + (teardownAct ? " / " + teardownAct : "");
+
+      // Combined Diagnostic Notes
+      var diagNotes = String(row[logCols.DIAGNOSTICS - 1] || "").trim();
+      var engComm = String(row[logCols.ENG_COMMENTS - 1] || "").trim();
+      var diagCombo = diagNotes + (engComm ? " | " + engComm : "");
+
+      // ✅ RE-MAPPED 12-COLUMN OPERATOR STATION TABLE WITH ABS
       var mappedRow = [
-        serialHyperlinkFormula,             // Col 1 (A): True Serial (Hyperlinked)
-        row[logCols.ROD_FORCE - 1],         // Col 2 (B): Rod Force
-        row[logCols.COMP_1 - 1],            // Col 3 (C): Low Speed Comp
-        row[logCols.REB_1 - 1],             // Col 4 (D): Low Speed Reb
-        row[logCols.SLOPE_1 - 1],           // Col 5 (E): Slope
-        row[logCols.LOOP_AREA_1 - 1],       // Col 6 (F): Loop Area
-        row[logCols.COMP_2 - 1],            // Col 7 (G): High Speed Comp
-        row[logCols.REB_2 - 1],             // Col 8 (H): High Speed Reb
-        row[logCols.COMP_3 - 1],            // Col 9 (I): Speed 3 Comp
-        row[logCols.REB_3 - 1],             // Col 10 (J): Speed 3 Reb
-        row[logCols.OVERALL_STATUS - 1],    // Col 11 (K): Overall Status
-        row[logCols.TIMESTAMP - 1]          // Col 12 (L): Date / Timestamp
+        serialHyperlinkFormula,                     // Col A (1): True Serial (Hyperlink)
+        safeAbsNum(row[logCols.ROD_FORCE - 1]),     // Col B (2): Rod Force (ABS)
+        safeAbsNum(row[logCols.COMP_1 - 1]),        // Col C (3): Low Speed Comp (ABS)
+        safeAbsNum(row[logCols.REB_1 - 1]),         // Col D (4): Low Speed Reb (ABS)
+        safeAbsNum(row[logCols.COMP_2 - 1]),        // Col E (5): Med Speed Comp (ABS)
+        safeAbsNum(row[logCols.REB_2 - 1]),         // Col F (6): Med Speed Reb (ABS)
+        safeAbsNum(row[logCols.COMP_3 - 1]),        // Col G (7): High Speed Comp (ABS)
+        safeAbsNum(row[logCols.REB_3 - 1]),         // Col H (8): High Speed Reb (ABS)
+        row[logCols.TEST_1_STATUS - 1] || "",       // Col I (9): Test 1 Status
+        row[logCols.TEST_2_STATUS - 1] || "",       // Col J (10): Test 2 Status
+        evalActionCombo,                            // Col K (11): Overall Status / Eval Action
+        diagCombo                                   // Col L (12): Diagnostic Notes
       ];
 
       rowsToDisplay.push(mappedRow);
-      rawRowIndexMap.push(actualSheetRow);
     }
   }
 
@@ -230,8 +267,8 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber)
   // 1. Write Mapped Data Values & Formulas
   outputRange.setValues(rowsToDisplay);
 
-  // 2. Set Decimal Formatting (X.X format on numeric force columns B through J)
-  var numericSubRange = sheet.getRange(startRow, 2, numRows, 9);
+  // 2. Set Decimal Formatting (X.X format on force columns B through H)
+  var numericSubRange = sheet.getRange(startRow, 2, numRows, 7);
   numericSubRange.setNumberFormat("0.0");
 
   // 3. Build Formatting Arrays for Batch Highlighting
@@ -247,12 +284,12 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber)
       var val = parseFloat(rowData[cIdx]);
       var isOut = false;
 
-      // Check force values against active limits
+      // Check positive force values against active limit bounds
       if (!isNaN(val)) {
-        if (cIdx === 2 && ((!isNaN(c1Min) && val < c1Min) || (!isNaN(c1Max) && val > c1Max))) isOut = true; // Comp 1
-        if (cIdx === 3 && ((!isNaN(r1Min) && val < r1Min) || (!isNaN(r1Max) && val > r1Max))) isOut = true; // Reb 1
-        if (cIdx === 6 && ((!isNaN(c2Min) && val < c2Min) || (!isNaN(c2Max) && val > c2Max))) isOut = true; // Comp 2
-        if (cIdx === 7 && ((!isNaN(r2Min) && val < r2Min) || (!isNaN(r2Max) && val > r2Max))) isOut = true; // Reb 2
+        if (cIdx === 2 && ((!isNaN(c1Min) && val < c1Min) || (!isNaN(c1Max) && val > c1Max))) isOut = true; // Low Comp
+        if (cIdx === 3 && ((!isNaN(r1Min) && val < r1Min) || (!isNaN(r1Max) && val > r1Max))) isOut = true; // Low Reb
+        if (cIdx === 4 && ((!isNaN(c2Min) && val < c2Min) || (!isNaN(c2Max) && val > c2Max))) isOut = true; // Med Comp
+        if (cIdx === 5 && ((!isNaN(r2Min) && val < r2Min) || (!isNaN(r2Max) && val > r2Max))) isOut = true; // Med Reb
       }
 
       if (isOut) {
@@ -267,6 +304,6 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber)
     fontColors.push(rowFont);
   }
 
-  // 4. Apply background and text formatting in a single API call
+  // 4. Batch apply background and text formatting in a single API call
   outputRange.setBackgrounds(bgColors).setFontColors(fontColors);
 }
