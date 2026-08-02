@@ -205,7 +205,7 @@ function populateSpecLimits(ss, sheet, programOrPart) {
 /**
  * Queries Master_Dyno_Log directly for records matching the scanned barcode prefix.
  * Deduplicates by True Serial (keeping the latest test entry), maps Col V & W to Col G & H,
- * and dynamically formats cell A8 Work Order status with color indicators.
+ * highlights specific failed force speeds as RED BOLD, and dynamically updates Cell A8.
  */
 function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber) {
   var logSheet = ss.getSheetByName(CONFIG.SHEET_NAMES.MASTER_DYNO_LOG);
@@ -349,19 +349,23 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber)
   sheet.getRange(startRow, 2, numRows, 5).setNumberFormat("0.0"); // Cols B..F
   sheet.getRange(startRow, 9, numRows, 2).setNumberFormat("0.0"); // Cols I..J
 
-  // 6. Build Formatting Arrays for Batch Highlighting
+  // 6. Build Formatting Arrays for Batch Highlighting (Failed forces -> RED BOLD)
   var bgColors = [];
   var fontColors = [];
+  var fontWeights = [];
 
   for (var rIdx = 0; rIdx < numRows; rIdx++) {
     var rowBg = [];
     var rowFont = [];
+    var rowWeight = [];
     var rowData = rowsToDisplay[rIdx];
 
     for (var cIdx = 0; cIdx < numCols; cIdx++) {
       var val = parseFloat(rowData[cIdx]);
+      var strVal = String(rowData[cIdx] || "").toUpperCase();
       var isOut = false;
 
+      // Evaluate numeric force columns against active spec limits
       if (!isNaN(val)) {
         if (cIdx === 2 && ((!isNaN(c1Min) && val < c1Min) || (!isNaN(c1Max) && val > c1Max))) isOut = true; // Low Comp
         if (cIdx === 3 && ((!isNaN(r1Min) && val < r1Min) || (!isNaN(r1Max) && val > r1Max))) isOut = true; // Low Reb
@@ -369,18 +373,26 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber)
         if (cIdx === 5 && ((!isNaN(r2Min) && val < r2Min) || (!isNaN(r2Max) && val > r2Max))) isOut = true; // Med Reb
       }
 
+      // Evaluate status text columns (Cols G and H)
+      if ((cIdx === 6 || cIdx === 7) && strVal.includes("FAIL")) {
+        isOut = true;
+      }
+
       if (isOut) {
-        rowBg.push("#FFCCCC");   // Production Light Red
-        rowFont.push("#990000"); // Production Dark Red
+        rowBg.push("#FFCCCC");   // Light Red Background
+        rowFont.push("#990000"); // Dark Red Text
+        rowWeight.push("bold");  // BOLD font for failing values
       } else {
         rowBg.push(null);        
         rowFont.push(null);
+        rowWeight.push("normal");
       }
     }
     bgColors.push(rowBg);
     fontColors.push(rowFont);
+    fontWeights.push(rowWeight);
   }
 
-  // 7. Batch apply background and text formatting in a single API call
-  outputRange.setBackgrounds(bgColors).setFontColors(fontColors);
+  // 7. Batch apply background, text formatting, and font weights in a single API call
+  outputRange.setBackgrounds(bgColors).setFontColors(fontColors).setFontWeights(fontWeights);
 }
