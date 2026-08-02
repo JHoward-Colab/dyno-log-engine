@@ -28,6 +28,30 @@ function safeAbsNum(val) {
 }
 
 /**
+ * Sets cell A8 text and dynamically formats background & text color based on the status.
+ */
+function setA8Status(sheet, statusMessage) {
+  var a8 = sheet.getRange("A8");
+  a8.setValue(statusMessage);
+
+  var upper = String(statusMessage).toUpperCase();
+
+  if (upper.includes("COMPLETED AND PASSING")) {
+    // Bright Green (#00C853) / White Text
+    a8.setBackground("#00C853").setFontColor("#FFFFFF").setFontWeight("bold");
+  } else if (upper.includes("FAIL") || upper.includes("ACTION REQUIRED") || upper.includes("NOT FOUND")) {
+    // Bright Red (#D50000) / White Text
+    a8.setBackground("#D50000").setFontColor("#FFFFFF").setFontWeight("bold");
+  } else if (upper.includes("CONDITIONAL") || upper.includes("ATTENTION") || upper.includes("PENDING") || upper.includes("IN PROGRESS")) {
+    // Bright Yellow (#FFD600) / Black Text
+    a8.setBackground("#FFD600").setFontColor("#000000").setFontWeight("bold");
+  } else {
+    // Neutral fallback reset
+    a8.setBackground(null).setFontColor(null).setFontWeight("normal");
+  }
+}
+
+/**
  * Operator Station Event Manager for Barcode Scanning & Work Order Lookup.
  */
 function manageOperatorStation(e) {
@@ -40,10 +64,10 @@ function manageOperatorStation(e) {
   var barcode = String(sheet.getRange(ranges.BARCODE_INPUT).getValue()).trim();  
     
   if (range.getA1Notation() === ranges.BARCODE_INPUT) {  
-    // 1. Clear Value Cells Only (Preserving static label cells A14:A18)
+    // 1. Clear Value Cells & Formatting Only (Preserving static label cells A14:A18)
     sheet.getRange(ranges.CLEAR_METADATA_RANGE).clearContent(); 
     sheet.getRange("C6").clearContent(); 
-    sheet.getRange("A8").clearContent(); // Work Order Status Cell
+    sheet.getRange("A8").clearContent().setBackground(null).setFontColor(null); // Reset Cell A8
     sheet.getRange("C14:C18").clearContent();  
     sheet.getRange("E14:E18").clearContent();  
     sheet.getRange("B22:F23").clearContent();
@@ -65,7 +89,7 @@ function manageOperatorStation(e) {
     if (!files.hasNext()) { 
       sheet.getRange(ranges.FILE_LINK_OUTPUT).setValue("❌ Work Order File Not Found: " + searchBarcode); 
       sheet.getRange("C6").setValue("CROSS-CHECK FAILED");
-      sheet.getRange("A8").setValue("WORK ORDER FILE NOT FOUND");
+      setA8Status(sheet, "WORK ORDER FILE NOT FOUND");
       return; 
     }  
     
@@ -181,7 +205,7 @@ function populateSpecLimits(ss, sheet, programOrPart) {
 /**
  * Queries Master_Dyno_Log directly for records matching the scanned barcode prefix.
  * Deduplicates by True Serial (keeping the latest test entry), maps Col V & W to Col G & H,
- * and accurately calculates cell A8 Work Order status.
+ * and dynamically formats cell A8 Work Order status with color indicators.
  */
 function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber) {
   var logSheet = ss.getSheetByName(CONFIG.SHEET_NAMES.MASTER_DYNO_LOG);
@@ -189,7 +213,7 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber)
 
   var logData = logSheet.getDataRange().getValues();
   if (logData.length <= 1) {
-    sheet.getRange("A8").setValue("PENDING TESTING");
+    setA8Status(sheet, "PENDING TESTING");
     return;
   }
 
@@ -297,7 +321,7 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber)
     rowsToDisplay.push(mappedRow);
   }
 
-  // 3. Accurate Cell A8 Work Order Status Evaluation
+  // 3. Accurate Cell A8 Work Order Status Evaluation with dynamic formatting
   var statusMessage = "";
   if (rowsToDisplay.length === 0) {
     statusMessage = "PENDING TESTING";
@@ -309,7 +333,7 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber)
     statusMessage = "WORK ORDER COMPLETED AND PASSING";
   }
 
-  sheet.getRange("A8").setValue(statusMessage);
+  setA8Status(sheet, statusMessage);
 
   if (rowsToDisplay.length === 0) return;
 
