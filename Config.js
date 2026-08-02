@@ -11,6 +11,11 @@ var CONFIG = {
     PROGRAM_REGISTRY: "Program_Registry"
   },
 
+  FOLDERS: {
+    WATCH_FOLDER: "01_Watch_Folder_DEV",
+    ARCHIVE_FOLDER: "02_Archive_DEV"
+  },
+
   OPERATOR_STATION: {
     RANGES: {
       BARCODE_INPUT: "C4",
@@ -40,8 +45,11 @@ var CONFIG = {
 
   COLUMNS: {
     MASTER_DYNO_LOG: {
-      TRUE_SERIAL: 1,       // Col A
-      BASE_MODEL: 2,        // Col B
+      TIMESTAMP: 1,         // Col A
+      PROGRAM_NAME: 2,      // Col B
+      TRUE_SERIAL: 3,       // Col C
+      BASE_MODEL: 4,        // Col D
+      VALVING_VERSION: 5,   // Col E
       ROD_FORCE: 8,         // Col H
       COMP_1: 9,            // Col I
       REB_1: 10,            // Col J
