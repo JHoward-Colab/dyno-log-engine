@@ -1,5 +1,6 @@
 // =========================================================================
 // ⚙️ GLOBAL CONFIGURATION & CONSTANTS (Config.js)
+// Single Source of Truth for Sheet Names, Ranges, and Column Mappings
 // =========================================================================
 
 const CONFIG = Object.freeze({
@@ -10,6 +11,7 @@ const CONFIG = Object.freeze({
     PROGRAM_REGISTRY: "Program_Registry"
   }),
 
+  // 🔒 DEV-SAFE FOLDER TARGETS
   FOLDERS: Object.freeze({
     WATCH_FOLDER: "01_Watch_Folder_DEV",
     ARCHIVE_FOLDER: "02_Archive_DEV"
@@ -27,12 +29,12 @@ const CONFIG = Object.freeze({
       CLEAR_RESULTS_RANGE: "A27:L100",
 
       LIMIT_C1_MIN: "B22",
-      LIMIT_C1_MAX: "B23",
-      LIMIT_R1_MIN: "C22",
-      LIMIT_R1_MAX: "C23",
-      LIMIT_C2_MIN: "D22",
-      LIMIT_C2_MAX: "D23",
-      LIMIT_R2_MIN: "E22",
+      LIMIT_C1_MAX: "C22",
+      LIMIT_R1_MIN: "D22",
+      LIMIT_R1_MAX: "E22",
+      LIMIT_C2_MIN: "B23",
+      LIMIT_C2_MAX: "C23",
+      LIMIT_R2_MIN: "D23",
       LIMIT_R2_MAX: "E23",
       LIMIT_SLOPE: "F22",
 
@@ -58,7 +60,6 @@ const CONFIG = Object.freeze({
       SPEED_2: 12,          // Col L
       COMP_2: 13,           // Col M
       REB_2: 14,            // Col N
-      LOOP_AREA_2: 15,      // Col O
       SPEED_3: 17,          // Col Q
       COMP_3: 18,           // Col R
       REB_3: 19,            // Col S
@@ -72,20 +73,20 @@ const CONFIG = Object.freeze({
 
     PART_REFERENCE_MATRIX: Object.freeze({
       PROGRAM_NAME: 1,
-      COMP_1_MIN: 2,
-      COMP_1_MAX: 3,
-      REB_1_MIN: 4,
-      REB_1_MAX: 5,
-      COMP_2_MIN: 6,
-      COMP_2_MAX: 7,
-      REB_2_MIN: 8,
-      REB_2_MAX: 9,
-      SLOPE_1_MIN: 10
+      COMP_1_MIN: 7,
+      COMP_1_MAX: 8,
+      REB_1_MIN: 11,
+      REB_1_MAX: 12,
+      COMP_2_MIN: 17,
+      COMP_2_MAX: 18,
+      REB_2_MIN: 21,
+      REB_2_MAX: 22,
+      SLOPE_1_MIN: 13
     }),
 
     PROGRAM_REGISTRY: Object.freeze({
       PROGRAM_NAME: 1,
-      BASE_MODEL: 2
+      BASE_MODEL: 3
     })
   }),
 
