@@ -104,7 +104,7 @@ function manageOperatorStation(e) {
           if (regPartClean === cleanWoPart && regProgName) {  
             matchedProgramName = regProgName;
             
-            // ✅ EXACT METADATA PANEL POPULATION (C14:C18)
+            // EXACT METADATA PANEL POPULATION (C14:C18)
             sheet.getRange("C14").setValue(regRow[3] || ""); // Col D: Customer Account
             sheet.getRange("C15").setValue(regRow[4] || ""); // Col E: Vehicle/Model Spec
             sheet.getRange("C16").setValue(regRow[0] || ""); // Col A: LABA7 Program Name
@@ -118,7 +118,7 @@ function manageOperatorStation(e) {
       // 3. Populate Limit Cells B22:F23 with absolute positive values
       populateSpecLimits(ss, sheet, matchedProgramName || woPartNumber);
 
-      // 4. Render dyno records with hyperlinks, ABS formatting & out-of-spec highlighting
+      // 4. Render dyno records in sequence, skipping rows for missing serials
       renderOperatorTableWithFormatting(ss, sheet, searchBarcode, woPartNumber);
 
     } catch(e) {
@@ -151,7 +151,6 @@ function populateSpecLimits(ss, sheet, programOrPart) {
 
   var ranges = CONFIG.OPERATOR_STATION.RANGES;
 
-  // Convert limit pairs to positive ABS bounds ensuring min <= max
   function getAbsPair(minVal, maxVal) {
     if (minVal === "" || maxVal === "") return { min: "", max: "" };
     var a = Math.abs(parseFloat(minVal));
@@ -178,8 +177,9 @@ function populateSpecLimits(ss, sheet, programOrPart) {
 }
 
 /**
- * Renders dyno log rows filtered by Work Order / Serial Prefix, converting all 
- * forces using ABS, formatting to X.X, and applying out-of-spec red highlighting.
+ * Renders dyno log rows filtered by Work Order / Serial Prefix.
+ * Deduplicates to latest test per serial, sorts sequentially by unit number,
+ * and leaves blank rows for missing serial numbers in the sequence.
  */
 function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber) {
   var logSheet = ss.getSheetByName(CONFIG.SHEET_NAMES.MASTER_DYNO_LOG);
@@ -206,7 +206,9 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber)
   var cleanBarcode = String(searchBarcode).trim().toLowerCase();
   var cleanPart = String(partNumber).trim().toLowerCase();
 
-  var rowsToDisplay = [];
+  var latestMapByUnit = {}; // Stores latest test by numeric unit number
+  var nonNumericTests = []; // Stores tests without numeric unit suffixes
+  var maxUnitNum = 0;
 
   for (var r = 1; r < logData.length; r++) {
     var row = logData[r];
@@ -221,23 +223,19 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber)
       isMatch = true;
     }
 
-    if (isMatch) {
-      // Hyperlink jumping to exact row on Master_Dyno_Log
+    if (isMatch && trueSerial !== "") {
       var actualSheetRow = r + 1;
       var rowLink = "#gid=" + logSheetId + "&range=A" + actualSheetRow;
       var serialHyperlinkFormula = '=HYPERLINK("' + rowLink + '", "' + trueSerial + '")';
 
-      // Combine Overall Status and Teardown / Evaluation Action
       var overallStat = String(row[logCols.OVERALL_STATUS - 1] || "").trim();
       var teardownAct = String(row[logCols.TEARDOWN_ACTION - 1] || "").trim();
       var evalActionCombo = overallStat + (teardownAct ? " / " + teardownAct : "");
 
-      // Combined Diagnostic Notes
       var diagNotes = String(row[logCols.DIAGNOSTICS - 1] || "").trim();
       var engComm = String(row[logCols.ENG_COMMENTS - 1] || "").trim();
       var diagCombo = diagNotes + (engComm ? " | " + engComm : "");
 
-      // ✅ RE-MAPPED 12-COLUMN OPERATOR STATION TABLE WITH ABS
       var mappedRow = [
         serialHyperlinkFormula,                     // Col A (1): True Serial (Hyperlink)
         safeAbsNum(row[logCols.ROD_FORCE - 1]),     // Col B (2): Rod Force (ABS)
@@ -253,8 +251,35 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber)
         diagCombo                                   // Col L (12): Diagnostic Notes
       ];
 
-      rowsToDisplay.push(mappedRow);
+      // Extract numeric unit suffix (e.g. "123456-003" -> 3)
+      var unitMatch = trueSerial.match(/[-_](\d+)$/);
+      if (unitMatch) {
+        var uNum = parseInt(unitMatch[1], 10);
+        latestMapByUnit[uNum] = mappedRow; // Overwrites earlier tests with latest test
+        if (uNum > maxUnitNum) maxUnitNum = uNum;
+      } else {
+        nonNumericTests.push(mappedRow);
+      }
     }
+  }
+
+  var rowsToDisplay = [];
+  var emptyRow = ["", "", "", "", "", "", "", "", "", "", "", ""];
+
+  // ✅ SEQUENTIAL SLOTTING: Fill slots 1 through maxUnitNum (leave blank row if missing)
+  if (maxUnitNum > 0) {
+    for (var u = 1; u <= maxUnitNum; u++) {
+      if (latestMapByUnit[u]) {
+        rowsToDisplay.push(latestMapByUnit[u]);
+      } else {
+        rowsToDisplay.push(emptyRow); // Missing serial slot
+      }
+    }
+  }
+
+  // Append any non-numeric unit serial matches
+  for (var n = 0; n < nonNumericTests.length; n++) {
+    rowsToDisplay.push(nonNumericTests[n]);
   }
 
   if (rowsToDisplay.length === 0) return;
@@ -284,8 +309,8 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber)
       var val = parseFloat(rowData[cIdx]);
       var isOut = false;
 
-      // Check positive force values against active limit bounds
-      if (!isNaN(val)) {
+      // Check positive force values against active limit bounds (ignore blank cells)
+      if (!isNaN(val) && rowData[0] !== "") {
         if (cIdx === 2 && ((!isNaN(c1Min) && val < c1Min) || (!isNaN(c1Max) && val > c1Max))) isOut = true; // Low Comp
         if (cIdx === 3 && ((!isNaN(r1Min) && val < r1Min) || (!isNaN(r1Max) && val > r1Max))) isOut = true; // Low Reb
         if (cIdx === 4 && ((!isNaN(c2Min) && val < c2Min) || (!isNaN(c2Max) && val > c2Max))) isOut = true; // Med Comp
