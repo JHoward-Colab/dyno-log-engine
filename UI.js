@@ -43,6 +43,7 @@ function manageOperatorStation(e) {
     // 1. Clear Value Cells Only (Preserving static label cells A14:A18)
     sheet.getRange(ranges.CLEAR_METADATA_RANGE).clearContent(); 
     sheet.getRange("C6").clearContent(); 
+    sheet.getRange("A8").clearContent(); // Work Order Status
     sheet.getRange("C14:C18").clearContent();  
     sheet.getRange("E14:E18").clearContent();  
     sheet.getRange("B22:F23").clearContent();
@@ -64,6 +65,7 @@ function manageOperatorStation(e) {
     if (!files.hasNext()) { 
       sheet.getRange(ranges.FILE_LINK_OUTPUT).setValue("❌ Work Order File Not Found: " + searchBarcode); 
       sheet.getRange("C6").setValue("CROSS-CHECK FAILED");
+      sheet.getRange("A8").setValue("WORK ORDER FILE NOT FOUND");
       return; 
     }  
     
@@ -93,8 +95,8 @@ function manageOperatorStation(e) {
         var regValues = registrySheet.getDataRange().getValues();  
         var cleanWoPart = woPartNumber.toLowerCase().replace(/[-_\s]/g, "");  
         
-        var regProgIdx = CONFIG.COLUMNS.PROGRAM_REGISTRY.PROGRAM_NAME - 1; // Col A (0)
-        var regBaseModelIdx = CONFIG.COLUMNS.PROGRAM_REGISTRY.BASE_MODEL - 1; // Col C (2)
+        var regProgIdx = CONFIG.COLUMNS.PROGRAM_REGISTRY.PROGRAM_NAME - 1;
+        var regBaseModelIdx = CONFIG.COLUMNS.PROGRAM_REGISTRY.BASE_MODEL - 1;
         
         for (var rR = 1; rR < regValues.length; rR++) {  
           var regRow = regValues[rR];
@@ -118,8 +120,8 @@ function manageOperatorStation(e) {
       // 3. Populate Limit Cells B22:F23 with absolute positive values
       populateSpecLimits(ss, sheet, matchedProgramName || woPartNumber);
 
-      // 4. Render dyno records in sequence, skipping rows for missing serials
-      renderOperatorTableWithFormatting(ss, sheet, searchBarcode, woPartNumber);
+      // 4. Render dyno records using Work Order serial list as master truth
+      renderOperatorTableWithWOAlignment(ss, sheet, woSheet, searchBarcode, woPartNumber);
 
     } catch(e) {
       Logger.log("WO Lookup Error: " + e.toString());
@@ -177,20 +179,58 @@ function populateSpecLimits(ss, sheet, programOrPart) {
 }
 
 /**
- * Renders dyno log rows filtered by Work Order / Serial Prefix.
- * Deduplicates to latest test per serial, sorts sequentially by unit number,
- * and leaves blank rows for missing serial numbers in the sequence.
+ * Extracts all expected serials directly from the Work Order spreadsheet.
+ * Cross-references Master_Dyno_Log for test results, maps Test 1 to Col G & Test 2 to Col H,
+ * and updates cell A8 with Overall Work Order Status.
  */
-function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber) {
-  var logSheet = ss.getSheetByName(CONFIG.SHEET_NAMES.MASTER_DYNO_LOG);
-  if (!logSheet) return;
-
-  var logData = logSheet.getDataRange().getValues();
-  if (logData.length <= 1) return;
-
-  var logCols = CONFIG.COLUMNS.MASTER_DYNO_LOG;
+function renderOperatorTableWithWOAlignment(ss, sheet, woSheet, searchBarcode, partNumber) {
   var ranges = CONFIG.OPERATOR_STATION.RANGES;
-  var logSheetId = logSheet.getSheetId();
+  var cleanBarcode = String(searchBarcode).trim().toLowerCase();
+
+  // 1. Extract master serial list directly from the Work Order File
+  var woValues = woSheet.getDataRange().getValues();
+  var woSerials = [];
+
+  for (var r = 0; r < woValues.length; r++) {
+    for (var c = 0; c < woValues[r].length; c++) {
+      var cellVal = String(woValues[r][c] || "").trim();
+      if (cellVal.toLowerCase().includes(cleanBarcode) && cellVal !== searchBarcode) {
+        if (!woSerials.includes(cellVal)) {
+          woSerials.push(cellVal);
+        }
+      }
+    }
+  }
+
+  // Sort WO serials sequentially by unit suffix
+  woSerials.sort(function(a, b) {
+    var mA = a.match(/[-_](\d+)$/);
+    var mB = b.match(/[-_](\d+)$/);
+    var uA = mA ? parseInt(mA[1], 10) : 0;
+    var uB = mB ? parseInt(mB[1], 10) : 0;
+    return uA - uB;
+  });
+
+  // 2. Query Master_Dyno_Log for test results
+  var logSheet = ss.getSheetByName(CONFIG.SHEET_NAMES.MASTER_DYNO_LOG);
+  var logCols = CONFIG.COLUMNS.MASTER_DYNO_LOG;
+  var logSheetId = logSheet ? logSheet.getSheetId() : null;
+
+  var latestTestsBySerial = {};
+
+  if (logSheet) {
+    var logData = logSheet.getDataRange().getValues();
+    for (var i = 1; i < logData.length; i++) {
+      var row = logData[i];
+      var trueSerial = String(row[logCols.TRUE_SERIAL - 1] || "").trim();
+      if (trueSerial.toLowerCase().includes(cleanBarcode)) {
+        latestTestsBySerial[trueSerial] = {
+          rowIdx: i + 1,
+          data: row
+        };
+      }
+    }
+  }
 
   // Read active spec limits directly from sheet cells B22:F23
   var c1Min = parseFloat(sheet.getRange(ranges.LIMIT_C1_MIN).getValue());
@@ -203,30 +243,33 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber)
   var r2Min = parseFloat(sheet.getRange(ranges.LIMIT_R2_MIN).getValue());
   var r2Max = parseFloat(sheet.getRange(ranges.LIMIT_R2_MAX).getValue());
 
-  var cleanBarcode = String(searchBarcode).trim().toLowerCase();
-  var cleanPart = String(partNumber).trim().toLowerCase();
+  var rowsToDisplay = [];
+  var testedCount = 0;
+  var test1PassCount = 0;
+  var test1FailCount = 0;
+  var test2PassCount = 0;
+  var test2FailCount = 0;
 
-  var latestMapByUnit = {}; // Stores latest test by numeric unit number
-  var nonNumericTests = []; // Stores tests without numeric unit suffixes
-  var maxUnitNum = 0;
+  // 3. Build mapped rows using WO Serials as Master Truth
+  for (var s = 0; s < woSerials.length; s++) {
+    var sNum = woSerials[s];
+    var testRecord = latestTestsBySerial[sNum];
 
-  for (var r = 1; r < logData.length; r++) {
-    var row = logData[r];
-    var trueSerial = String(row[logCols.TRUE_SERIAL - 1] || "").trim();
-    var baseModel = String(row[logCols.BASE_MODEL - 1] || "").trim().toLowerCase();
+    if (testRecord) {
+      testedCount++;
+      var row = testRecord.data;
+      var actualRow = testRecord.rowIdx;
+      var rowLink = "#gid=" + logSheetId + "&range=A" + actualRow;
+      var serialHyperlinkFormula = '=HYPERLINK("' + rowLink + '", "' + sNum + '")';
 
-    // Filter: Match serial against scanned WO barcode prefix
-    var isMatch = false;
-    if (cleanBarcode !== "" && trueSerial.toLowerCase().includes(cleanBarcode)) {
-      isMatch = true;
-    } else if (cleanPart !== "" && baseModel === cleanPart && (cleanBarcode === "" || cleanBarcode === "undefined")) {
-      isMatch = true;
-    }
+      var t1Status = String(row[logCols.TEST_1_STATUS - 1] || "").trim();
+      var t2Status = String(row[logCols.TEST_2_STATUS - 1] || "").trim();
 
-    if (isMatch && trueSerial !== "") {
-      var actualSheetRow = r + 1;
-      var rowLink = "#gid=" + logSheetId + "&range=A" + actualSheetRow;
-      var serialHyperlinkFormula = '=HYPERLINK("' + rowLink + '", "' + trueSerial + '")';
+      if (t1Status.toUpperCase() === "PASS") test1PassCount++;
+      else if (t1Status.toUpperCase() === "FAIL") test1FailCount++;
+
+      if (t2Status.toUpperCase() === "PASS") test2PassCount++;
+      else if (t2Status.toUpperCase() === "FAIL") test2FailCount++;
 
       var overallStat = String(row[logCols.OVERALL_STATUS - 1] || "").trim();
       var teardownAct = String(row[logCols.TEARDOWN_ACTION - 1] || "").trim();
@@ -236,6 +279,7 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber)
       var engComm = String(row[logCols.ENG_COMMENTS - 1] || "").trim();
       var diagCombo = diagNotes + (engComm ? " | " + engComm : "");
 
+      // ✅ CORRECTED 12-COLUMN MAPPING (Col G = Test 1, Col H = Test 2)
       var mappedRow = [
         serialHyperlinkFormula,                     // Col A (1): True Serial (Hyperlink)
         safeAbsNum(row[logCols.ROD_FORCE - 1]),     // Col B (2): Rod Force (ABS)
@@ -243,44 +287,39 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber)
         safeAbsNum(row[logCols.REB_1 - 1]),         // Col D (4): Low Speed Reb (ABS)
         safeAbsNum(row[logCols.COMP_2 - 1]),        // Col E (5): Med Speed Comp (ABS)
         safeAbsNum(row[logCols.REB_2 - 1]),         // Col F (6): Med Speed Reb (ABS)
-        safeAbsNum(row[logCols.COMP_3 - 1]),        // Col G (7): High Speed Comp (ABS)
-        safeAbsNum(row[logCols.REB_3 - 1]),         // Col H (8): High Speed Reb (ABS)
-        row[logCols.TEST_1_STATUS - 1] || "",       // Col I (9): Test 1 Status
-        row[logCols.TEST_2_STATUS - 1] || "",       // Col J (10): Test 2 Status
+        t1Status,                                   // Col G (7): Test 1 Status
+        t2Status,                                   // Col H (8): Test 2 Status
+        safeAbsNum(row[logCols.COMP_3 - 1]),        // Col I (9): High Speed Comp (ABS)
+        safeAbsNum(row[logCols.REB_3 - 1]),         // Col J (10): High Speed Reb (ABS)
         evalActionCombo,                            // Col K (11): Overall Status / Eval Action
         diagCombo                                   // Col L (12): Diagnostic Notes
       ];
-
-      // Extract numeric unit suffix (e.g. "123456-003" -> 3)
-      var unitMatch = trueSerial.match(/[-_](\d+)$/);
-      if (unitMatch) {
-        var uNum = parseInt(unitMatch[1], 10);
-        latestMapByUnit[uNum] = mappedRow; // Overwrites earlier tests with latest test
-        if (uNum > maxUnitNum) maxUnitNum = uNum;
-      } else {
-        nonNumericTests.push(mappedRow);
-      }
+      rowsToDisplay.push(mappedRow);
+    } else {
+      // Missing test result: display serial with empty data slots
+      rowsToDisplay.push([sNum, "", "", "", "", "", "", "", "", "", "", ""]);
     }
   }
 
-  var rowsToDisplay = [];
-  var emptyRow = ["", "", "", "", "", "", "", "", "", "", "", ""];
+  // 4. Update Work Order Status in Cell A8
+  var totalSerials = woSerials.length;
+  var statusMessage = "";
 
-  // ✅ SEQUENTIAL SLOTTING: Fill slots 1 through maxUnitNum (leave blank row if missing)
-  if (maxUnitNum > 0) {
-    for (var u = 1; u <= maxUnitNum; u++) {
-      if (latestMapByUnit[u]) {
-        rowsToDisplay.push(latestMapByUnit[u]);
-      } else {
-        rowsToDisplay.push(emptyRow); // Missing serial slot
-      }
-    }
+  if (totalSerials === 0) {
+    statusMessage = "NO SERIALS FOUND IN WORK ORDER";
+  } else if (testedCount === 0) {
+    statusMessage = "PENDING TESTING";
+  } else if (test1FailCount > 0) {
+    statusMessage = "ACTION REQUIRED: Test 1 Failure Detected (" + test1FailCount + " unit(s))";
+  } else if (test2FailCount > 0) {
+    statusMessage = "CONDITIONAL PASS: Attention Required (Test 2 Outlier Detected)";
+  } else if (testedCount === totalSerials && test1FailCount === 0 && test2FailCount === 0) {
+    statusMessage = "WORK ORDER COMPLETED AND PASSING";
+  } else {
+    statusMessage = "IN PROGRESS: " + testedCount + "/" + totalSerials + " Units Tested (All Passing)";
   }
 
-  // Append any non-numeric unit serial matches
-  for (var n = 0; n < nonNumericTests.length; n++) {
-    rowsToDisplay.push(nonNumericTests[n]);
-  }
+  sheet.getRange("A8").setValue(statusMessage);
 
   if (rowsToDisplay.length === 0) return;
 
@@ -289,14 +328,14 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber)
   var numCols = ranges.RESULTS_COL_COUNT;   // 12 columns
   var outputRange = sheet.getRange(startRow, ranges.RESULTS_START_COL, numRows, numCols);
 
-  // 1. Write Mapped Data Values & Formulas
+  // 5. Write Mapped Data Values & Formulas
   outputRange.setValues(rowsToDisplay);
 
-  // 2. Set Decimal Formatting (X.X format on force columns B through H)
-  var numericSubRange = sheet.getRange(startRow, 2, numRows, 7);
-  numericSubRange.setNumberFormat("0.0");
+  // 6. Set Decimal Formatting (X.X format on force columns B through F, I, J)
+  sheet.getRange(startRow, 2, numRows, 5).setNumberFormat("0.0");
+  sheet.getRange(startRow, 9, numRows, 2).setNumberFormat("0.0");
 
-  // 3. Build Formatting Arrays for Batch Highlighting
+  // 7. Build Formatting Arrays for Batch Highlighting
   var bgColors = [];
   var fontColors = [];
 
@@ -309,7 +348,6 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber)
       var val = parseFloat(rowData[cIdx]);
       var isOut = false;
 
-      // Check positive force values against active limit bounds (ignore blank cells)
       if (!isNaN(val) && rowData[0] !== "") {
         if (cIdx === 2 && ((!isNaN(c1Min) && val < c1Min) || (!isNaN(c1Max) && val > c1Max))) isOut = true; // Low Comp
         if (cIdx === 3 && ((!isNaN(r1Min) && val < r1Min) || (!isNaN(r1Max) && val > r1Max))) isOut = true; // Low Reb
@@ -329,6 +367,6 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber)
     fontColors.push(rowFont);
   }
 
-  // 4. Batch apply background and text formatting in a single API call
+  // 8. Apply background and text formatting in a single API call
   outputRange.setBackgrounds(bgColors).setFontColors(fontColors);
 }
