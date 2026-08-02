@@ -1,18 +1,46 @@
 // =========================================================================
 // 🖥️ USER INTERFACE & CONTROLLERS (UI.js)
-// Workspace Rendering, Button Actions & Triggers
+// Workspace Rendering, Button Actions & Triggers with Active Pop-up Alerts
 // =========================================================================
 
+/**
+ * Master Sync Action triggered by button click on Operator Station.
+ */
 function clickMasterSyncButton() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var ui = SpreadsheetApp.getUi();
+  
+  // Visual feedback pop-up in bottom right corner
+  ss.toast("Syncing Work Order and Dyno Logs...", "Operator Station", 5);
+
+  // Robust Sheet Name Lookup
+  var targetName = CONFIG.SHEET_NAMES.OPERATOR_STATION;
+  var sheet = ss.getSheetByName(targetName);
+
+  if (!sheet) {
+    // Try fallback variations (space vs underscore)
+    var altName = targetName.includes(" ") ? targetName.replace(/ /g, "_") : targetName.replace(/_/g, " ");
+    sheet = ss.getSheetByName(altName);
+    
+    if (!sheet) {
+      ui.alert("❌ Tab Name Error", "Could not find a sheet tab named '" + targetName + "' or '" + altName + "'. Please check the tab name at the bottom of your Google Sheet.", ui.ButtonSet.OK);
+      return;
+    }
+  }
+
+  // Run backend processing
   try { processDynoFiles(); } catch(e) { Logger.log("Watch folder alert: " + e.toString()); }
   try { retroactiveLogRecalculate(); } catch(e) { Logger.log("Reference Matrix Recalculation Alert: " + e.toString()); }
+
+  // Execute UI Refresh with active error alerting
   try {
-    var sheet = ss.getSheetByName(CONFIG.SHEET_NAMES.OPERATOR_STATION);
-    if (sheet) {
-      manageOperatorStation({ source: ss, range: sheet.getRange(CONFIG.OPERATOR_STATION.RANGES.BARCODE_INPUT) });
-    }
-  } catch(e) { Logger.log("Console screen alert: " + e.toString()); }
+    var barcodeRange = sheet.getRange(CONFIG.OPERATOR_STATION.RANGES.BARCODE_INPUT);
+    manageOperatorStation({ source: ss, range: barcodeRange });
+    ss.toast("Sync Complete!", "Operator Station", 3);
+  } catch(e) {
+    Logger.log("Console screen alert: " + e.toString());
+    ui.alert("❌ Sync Failed", "An error occurred during sync:\n\n" + e.toString(), ui.ButtonSet.OK);
+  }
 }
 
 function safeAbsNum(val) {
@@ -26,9 +54,6 @@ function cleanKey(val) {
   return String(val).toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
-/**
- * Safely converts raw signed limits into sorted positive absolute bounds.
- */
 function getAbsPair(val1, val2) {
   var a = Math.abs(parseFloat(val1));
   var b = Math.abs(parseFloat(val2));
@@ -56,92 +81,98 @@ function setA8Status(sheet, statusMessage) {
 
 function manageOperatorStation(e) {
   var ss = e ? e.source : SpreadsheetApp.getActiveSpreadsheet(); 
+  var ranges = CONFIG.OPERATOR_STATION.RANGES;
+
   var sheet = ss.getSheetByName(CONFIG.SHEET_NAMES.OPERATOR_STATION); 
+  if (!sheet) {
+    var altName = CONFIG.SHEET_NAMES.OPERATOR_STATION.includes(" ") ? CONFIG.SHEET_NAMES.OPERATOR_STATION.replace(/ /g, "_") : CONFIG.SHEET_NAMES.OPERATOR_STATION.replace(/_/g, " ");
+    sheet = ss.getSheetByName(altName);
+  }
   if (!sheet) return;
   
-  var ranges = CONFIG.OPERATOR_STATION.RANGES;
-  var range = e ? e.range : sheet.getRange(ranges.BARCODE_INPUT); 
   var barcode = String(sheet.getRange(ranges.BARCODE_INPUT).getValue()).trim();  
     
-  if (range.getA1Notation() === ranges.BARCODE_INPUT) {  
-    sheet.getRange(ranges.CLEAR_METADATA_RANGE).clearContent(); 
-    sheet.getRange("C6").clearContent(); 
-    sheet.getRange("A8").clearContent().setBackground(null).setFontColor(null);
-    sheet.getRange("C14:C18").clearContent();  
-    sheet.getRange("E14:E18").clearContent();  
-    sheet.getRange("B22:F23").clearContent();
-    
-    var tableRange = sheet.getRange(ranges.CLEAR_RESULTS_RANGE);   
-    tableRange.clearContent();   
-    tableRange.setBackground("#FFFFFF").setFontColor("#000000").setFontWeight("normal");   
+  sheet.getRange(ranges.CLEAR_METADATA_RANGE).clearContent(); 
+  sheet.getRange("C6").clearContent(); 
+  sheet.getRange("A8").clearContent().setBackground(null).setFontColor(null);
+  sheet.getRange("C14:C18").clearContent();  
+  sheet.getRange("E14:E18").clearContent();  
+  sheet.getRange("B22:F23").clearContent();
+  
+  var tableRange = sheet.getRange(ranges.CLEAR_RESULTS_RANGE);   
+  tableRange.clearContent();   
+  tableRange.setBackground("#FFFFFF").setFontColor("#000000").setFontWeight("normal");   
 
-    if (!barcode || barcode === "undefined" || barcode === "null") return;  
-      
-    var searchBarcode = barcode;  
-    if (barcode.includes("-")) { searchBarcode = barcode.split("-")[0].trim(); }   
-    else if (barcode.includes("_")) { searchBarcode = barcode.split("_")[0].trim(); }  
-    if (!isNaN(searchBarcode) && searchBarcode.length === 4) { searchBarcode = "00" + searchBarcode; }  
-      
-    var searchCriteria = "title contains '" + searchBarcode + "' and (mimeType = 'application/vnd.google-apps.spreadsheet' or mimeType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet') and trashed = false";  
-    var files = DriveApp.searchFiles(searchCriteria);  
-    if (!files.hasNext()) { 
-      sheet.getRange(ranges.FILE_LINK_OUTPUT).setValue("❌ Work Order File Not Found: " + searchBarcode); 
-      sheet.getRange("C6").setValue("CROSS-CHECK FAILED");
-      setA8Status(sheet, "WORK ORDER FILE NOT FOUND");
-      return; 
-    }  
+  if (!barcode || barcode === "undefined" || barcode === "null") {
+    setA8Status(sheet, "ENTER WORK ORDER / BARCODE");
+    return;  
+  }
     
-    var file = files.next();  
-    var verifiedFileIdStr = file.getId(); 
-    var realFileName = file.getName();   
+  var searchBarcode = barcode;  
+  if (barcode.includes("-")) { searchBarcode = barcode.split("-")[0].trim(); }   
+  else if (barcode.includes("_")) { searchBarcode = barcode.split("_")[0].trim(); }  
+  if (!isNaN(searchBarcode) && searchBarcode.length === 4) { searchBarcode = "00" + searchBarcode; }  
     
-    sheet.getRange(ranges.FILE_LINK_OUTPUT).setFormula('=HYPERLINK("' + file.getUrl() + '", "🔗 Open ' + realFileName + '")');   
-    sheet.getRange(ranges.CACHED_FILE_ID).setValue(verifiedFileIdStr);  
-      
-    try {  
-      var woSpreadsheet = SpreadsheetApp.openById(verifiedFileIdStr); 
-      var woSheet = woSpreadsheet.getSheets()[0];   
-      var woPartNumber = String(woSheet.getRange("D3").getValue()).trim(); 
-      var woBomRevision = String(woSheet.getRange("D4").getValue()).trim();   
-      
-      sheet.getRange(ranges.BOM_REV_OUTPUT).setValue(woBomRevision); 
-      sheet.getRange(ranges.PART_NO_OUTPUT).setValue(woPartNumber);   
-      sheet.getRange("C6").setValue(searchBarcode);
-      
-      var registrySheet = ss.getSheetByName(CONFIG.SHEET_NAMES.PROGRAM_REGISTRY);  
-      var matchedProgramName = "";
+  var searchCriteria = "title contains '" + searchBarcode + "' and (mimeType = 'application/vnd.google-apps.spreadsheet' or mimeType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet') and trashed = false";  
+  var files = DriveApp.searchFiles(searchCriteria);  
+  if (!files.hasNext()) { 
+    sheet.getRange(ranges.FILE_LINK_OUTPUT).setValue("❌ Work Order File Not Found: " + searchBarcode); 
+    sheet.getRange("C6").setValue("CROSS-CHECK FAILED");
+    setA8Status(sheet, "WORK ORDER FILE NOT FOUND");
+    return; 
+  }  
+  
+  var file = files.next();  
+  var verifiedFileIdStr = file.getId(); 
+  var realFileName = file.getName();   
+  
+  sheet.getRange(ranges.FILE_LINK_OUTPUT).setFormula('=HYPERLINK("' + file.getUrl() + '", "🔗 Open ' + realFileName + '")');   
+  sheet.getRange(ranges.CACHED_FILE_ID).setValue(verifiedFileIdStr);  
+    
+  try {  
+    var woSpreadsheet = SpreadsheetApp.openById(verifiedFileIdStr); 
+    var woSheet = woSpreadsheet.getSheets()[0];   
+    var woPartNumber = String(woSheet.getRange("D3").getValue()).trim(); 
+    var woBomRevision = String(woSheet.getRange("D4").getValue()).trim();   
+    
+    sheet.getRange(ranges.BOM_REV_OUTPUT).setValue(woBomRevision); 
+    sheet.getRange(ranges.PART_NO_OUTPUT).setValue(woPartNumber);   
+    sheet.getRange("C6").setValue(searchBarcode);
+    
+    var registrySheet = ss.getSheetByName(CONFIG.SHEET_NAMES.PROGRAM_REGISTRY);  
+    var matchedProgramName = "";
 
-      if (registrySheet && woPartNumber) {  
-        var regValues = registrySheet.getDataRange().getValues();  
-        var cleanWoPart = cleanKey(woPartNumber);  
+    if (registrySheet && woPartNumber) {  
+      var regValues = registrySheet.getDataRange().getValues();  
+      var cleanWoPart = cleanKey(woPartNumber);  
+      
+      var regProgIdx = CONFIG.COLUMNS.PROGRAM_REGISTRY.PROGRAM_NAME - 1; 
+      var regBaseModelIdx = CONFIG.COLUMNS.PROGRAM_REGISTRY.BASE_MODEL - 1; 
+      
+      for (var rR = 1; rR < regValues.length; rR++) {  
+        var regRow = regValues[rR];
+        var regPartClean = cleanKey(regRow[regBaseModelIdx]);  
+        var regProgName = String(regRow[regProgIdx] || "").trim();  
         
-        var regProgIdx = CONFIG.COLUMNS.PROGRAM_REGISTRY.PROGRAM_NAME - 1; 
-        var regBaseModelIdx = CONFIG.COLUMNS.PROGRAM_REGISTRY.BASE_MODEL - 1; 
-        
-        for (var rR = 1; rR < regValues.length; rR++) {  
-          var regRow = regValues[rR];
-          var regPartClean = cleanKey(regRow[regBaseModelIdx]);  
-          var regProgName = String(regRow[regProgIdx] || "").trim();  
-          
-          if (regPartClean === cleanWoPart && regProgName) {  
-            matchedProgramName = regProgName;
-            sheet.getRange("C14").setValue(regRow[3] || ""); 
-            sheet.getRange("C15").setValue(regRow[4] || ""); 
-            sheet.getRange("C16").setValue(regRow[0] || ""); 
-            sheet.getRange("C17").setValue(regRow[6] || ""); 
-            sheet.getRange("C18").setValue(regRow[7] || ""); 
-            break;
-          }  
+        if (regPartClean === cleanWoPart && regProgName) {  
+          matchedProgramName = regProgName;
+          sheet.getRange("C14").setValue(regRow[3] || ""); 
+          sheet.getRange("C15").setValue(regRow[4] || ""); 
+          sheet.getRange("C16").setValue(regRow[0] || ""); 
+          sheet.getRange("C17").setValue(regRow[6] || ""); 
+          sheet.getRange("C18").setValue(regRow[7] || ""); 
+          break;
         }  
       }  
+    }  
 
-      populateSpecLimits(ss, sheet, matchedProgramName || woPartNumber);
-      renderOperatorTableWithFormatting(ss, sheet, searchBarcode, woPartNumber);
+    populateSpecLimits(ss, sheet, matchedProgramName || woPartNumber);
+    renderOperatorTableWithFormatting(ss, sheet, searchBarcode, woPartNumber);
 
-    } catch(e) {
-      Logger.log("WO Lookup Error: " + e.toString());
-    }
-  }  
+  } catch(e) {
+    Logger.log("WO Lookup Error: " + e.toString());
+    throw new Error("Work Order Lookup Failed: " + e.message);
+  }
 }  
 
 function populateSpecLimits(ss, sheet, programOrPart) {
@@ -195,7 +226,6 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber)
   var ranges = CONFIG.OPERATOR_STATION.RANGES;
   var logSheetId = logSheet.getSheetId();
 
-  // Read active spec limits directly off the sheet display (B22:E23) and ensure min <= max
   var rawC1 = getAbsPair(sheet.getRange(ranges.LIMIT_C1_MIN).getValue(), sheet.getRange(ranges.LIMIT_C1_MAX).getValue());
   var rawR1 = getAbsPair(sheet.getRange(ranges.LIMIT_R1_MIN).getValue(), sheet.getRange(ranges.LIMIT_R1_MAX).getValue());
   var rawC2 = getAbsPair(sheet.getRange(ranges.LIMIT_C2_MIN).getValue(), sheet.getRange(ranges.LIMIT_C2_MAX).getValue());
@@ -215,8 +245,8 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber)
 
   for (var r = 1; r < logData.length; r++) {
     var row = logData[r];
-    var trueSerial = String(row[logCols.TRUE_SERIAL - 1] || "").trim(); // Col C (3)
-    var baseModel = cleanKey(row[logCols.BASE_MODEL - 1]);             // Col D (4)
+    var trueSerial = String(row[logCols.TRUE_SERIAL - 1] || "").trim();
+    var baseModel = cleanKey(row[logCols.BASE_MODEL - 1]);
     var cleanSerial = cleanKey(trueSerial);
 
     var isMatch = false;
@@ -252,30 +282,30 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber)
     var rowLink = "#gid=" + logSheetId + "&range=A" + actualSheetRow;
     var serialHyperlinkFormula = '=HYPERLINK("' + rowLink + '", "' + trueSerial + '")';
 
-    var t1Status = String(row[logCols.TEST_1_STATUS - 1] || "").trim(); // Col V (22)
-    var t2Status = String(row[logCols.TEST_2_STATUS - 1] || "").trim(); // Col W (23)
+    var t1Status = String(row[logCols.TEST_1_STATUS - 1] || "").trim();
+    var t2Status = String(row[logCols.TEST_2_STATUS - 1] || "").trim();
 
     if (t1Status.toUpperCase().includes("FAIL")) test1FailCount++;
     if (t2Status.toUpperCase().includes("FAIL")) test2FailCount++;
 
-    var overallStat  = String(row[logCols.OVERALL_STATUS - 1] || "").trim();   // Col X (24) -> UI Col I
-    var evalAction   = String(row[logCols.EVALUATION_ACTION - 1] || "").trim(); // Col Z (26) -> UI Col J
-    var diagnostics  = String(row[logCols.DIAGNOSTICS - 1] || "").trim();        // Col Y (25) -> UI Col K
-    var engComments  = String(row[logCols.ENG_COMMENTS - 1] || "").trim();       // Col AA (27) -> UI Col L
+    var overallStat  = String(row[logCols.OVERALL_STATUS - 1] || "").trim();   
+    var evalAction   = String(row[logCols.EVALUATION_ACTION - 1] || "").trim(); 
+    var diagnostics  = String(row[logCols.DIAGNOSTICS - 1] || "").trim();        
+    var engComments  = String(row[logCols.ENG_COMMENTS - 1] || "").trim();       
 
     var mappedRow = [
-      serialHyperlinkFormula,                          // Col A (1): True Serial
-      safeAbsNum(row[logCols.ROD_FORCE - 1]),          // Col B (2): Rod Force (Col F/6)
-      safeAbsNum(row[logCols.COMP_1 - 1]),             // Col C (3): Comp 1 (Col H/8)
-      safeAbsNum(row[logCols.REB_1 - 1]),              // Col D (4): Reb 1 (Col I/9)
-      safeAbsNum(row[logCols.COMP_2 - 1]),             // Col E (5): Comp 2 (Col M/13)
-      safeAbsNum(row[logCols.REB_2 - 1]),              // Col F (6): Reb 2 (Col N/14)
-      t1Status,                                        // Col G (7): Test 1 Status (Col V/22)
-      t2Status,                                        // Col H (8): Test 2 Status (Col W/23)
-      overallStat,                                     // Col I (9): Overall Status (Col X/24)
-      evalAction,                                      // Col J (10): Evaluation Action (Col Z/26)
-      diagnostics,                                     // Col K (11): Diagnostics & Troubleshooting (Col Y/25)
-      engComments                                      // Col L (12): Diagnostic Notes (Col AA/27)
+      serialHyperlinkFormula,                          // Col A (1): Serial
+      safeAbsNum(row[logCols.ROD_FORCE - 1]),          // Col B (2): Rod Force
+      safeAbsNum(row[logCols.COMP_1 - 1]),             // Col C (3): Comp 1
+      safeAbsNum(row[logCols.REB_1 - 1]),              // Col D (4): Reb 1
+      safeAbsNum(row[logCols.COMP_2 - 1]),             // Col E (5): Comp 2
+      safeAbsNum(row[logCols.REB_2 - 1]),              // Col F (6): Reb 2
+      t1Status,                                        // Col G (7): Test 1 Status
+      t2Status,                                        // Col H (8): Test 2 Status
+      overallStat,                                     // Col I (9): Overall Status
+      evalAction,                                      // Col J (10): Evaluation Action
+      diagnostics,                                     // Col K (11): Diagnostics
+      engComments                                      // Col L (12): Diagnostic Notes
     ];
 
     rowsToDisplay.push(mappedRow);
@@ -321,12 +351,11 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber)
       var strVal = String(rowData[cIdx] || "").toUpperCase();
       var isOut = false;
 
-      // Evaluate numeric force columns against active spec limits
       if (!isNaN(val)) {
-        if (cIdx === 2 && ((!isNaN(limits.c1Min) && val < limits.c1Min) || (!isNaN(limits.c1Max) && val > limits.c1Max))) isOut = true; // Col C
-        if (cIdx === 3 && ((!isNaN(limits.r1Min) && val < limits.r1Min) || (!isNaN(limits.r1Max) && val > limits.r1Max))) isOut = true; // Col D
-        if (cIdx === 4 && ((!isNaN(limits.c2Min) && val < limits.c2Min) || (!isNaN(limits.c2Max) && val > limits.c2Max))) isOut = true; // Col E
-        if (cIdx === 5 && ((!isNaN(limits.r2Min) && val < limits.r2Min) || (!isNaN(limits.r2Max) && val > limits.r2Max))) isOut = true; // Col F
+        if (cIdx === 2 && ((!isNaN(limits.c1Min) && val < limits.c1Min) || (!isNaN(limits.c1Max) && val > limits.c1Max))) isOut = true;
+        if (cIdx === 3 && ((!isNaN(limits.r1Min) && val < limits.r1Min) || (!isNaN(limits.r1Max) && val > limits.r1Max))) isOut = true;
+        if (cIdx === 4 && ((!isNaN(limits.c2Min) && val < limits.c2Min) || (!isNaN(limits.c2Max) && val > limits.c2Max))) isOut = true;
+        if (cIdx === 5 && ((!isNaN(limits.r2Min) && val < limits.r2Min) || (!isNaN(limits.r2Max) && val > limits.r2Max))) isOut = true;
       }
 
       if ((cIdx === 6 || cIdx === 7 || cIdx === 8) && strVal.includes("FAIL")) {
