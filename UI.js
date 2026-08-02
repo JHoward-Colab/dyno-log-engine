@@ -19,7 +19,15 @@ function clickMasterSyncButton() {
 }
 
 /**
- * Helper to safely extract positive absolute numbers formatted or null.
+ * Normalizes serial strings for fuzzy key matching (removes spaces, dashes, underscores, and case).
+ */
+function normalizeSerialKey(str) {
+  if (str === null || str === undefined) return "";
+  return String(str).trim().toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+/**
+ * Helper to safely extract positive absolute numbers.
  */
 function safeAbsNum(val) {
   if (val === "" || val === null || val === undefined) return "";
@@ -33,7 +41,7 @@ function safeAbsNum(val) {
 function manageOperatorStation(e) {
   var ss = e ? e.source : SpreadsheetApp.getActiveSpreadsheet(); 
   var sheet = ss.getSheetByName(CONFIG.SHEET_NAMES.OPERATOR_STATION); 
-  if (!sheet) return;
+  if (!sheet) return;  
   
   var ranges = CONFIG.OPERATOR_STATION.RANGES;
   var range = e ? e.range : sheet.getRange(ranges.BARCODE_INPUT); 
@@ -43,7 +51,7 @@ function manageOperatorStation(e) {
     // 1. Clear Value Cells Only (Preserving static label cells A14:A18)
     sheet.getRange(ranges.CLEAR_METADATA_RANGE).clearContent(); 
     sheet.getRange("C6").clearContent(); 
-    sheet.getRange("A8").clearContent(); // Work Order Status
+    sheet.getRange("A8").clearContent(); 
     sheet.getRange("C14:C18").clearContent();  
     sheet.getRange("E14:E18").clearContent();  
     sheet.getRange("B22:F23").clearContent();
@@ -95,8 +103,8 @@ function manageOperatorStation(e) {
         var regValues = registrySheet.getDataRange().getValues();  
         var cleanWoPart = woPartNumber.toLowerCase().replace(/[-_\s]/g, "");  
         
-        var regProgIdx = CONFIG.COLUMNS.PROGRAM_REGISTRY.PROGRAM_NAME - 1;
-        var regBaseModelIdx = CONFIG.COLUMNS.PROGRAM_REGISTRY.BASE_MODEL - 1;
+        var regProgIdx = CONFIG.COLUMNS.PROGRAM_REGISTRY.PROGRAM_NAME - 1; 
+        var regBaseModelIdx = CONFIG.COLUMNS.PROGRAM_REGISTRY.BASE_MODEL - 1; 
         
         for (var rR = 1; rR < regValues.length; rR++) {  
           var regRow = regValues[rR];
@@ -120,7 +128,7 @@ function manageOperatorStation(e) {
       // 3. Populate Limit Cells B22:F23 with absolute positive values
       populateSpecLimits(ss, sheet, matchedProgramName || woPartNumber);
 
-      // 4. Render dyno records using Work Order serial list as master truth
+      // 4. Render dyno records using normalized key matching
       renderOperatorTableWithWOAlignment(ss, sheet, woSheet, searchBarcode, woPartNumber);
 
     } catch(e) {
@@ -179,13 +187,57 @@ function populateSpecLimits(ss, sheet, programOrPart) {
 }
 
 /**
- * Extracts all expected serials directly from the Work Order spreadsheet.
- * Cross-references Master_Dyno_Log for test results, maps Test 1 to Col G & Test 2 to Col H,
- * and updates cell A8 with Overall Work Order Status.
+ * Dynamically resolves Master_Dyno_Log column header positions.
+ */
+function getLogHeaderIndices(headerRow) {
+  var cols = CONFIG.COLUMNS.MASTER_DYNO_LOG;
+  var map = {
+    trueSerial: cols.TRUE_SERIAL - 1,
+    baseModel: cols.BASE_MODEL - 1,
+    rodForce: cols.ROD_FORCE - 1,
+    comp1: cols.COMP_1 - 1,
+    reb1: cols.REB_1 - 1,
+    comp2: cols.COMP_2 - 1,
+    reb2: cols.REB_2 - 1,
+    comp3: cols.COMP_3 - 1,
+    reb3: cols.REB_3 - 1,
+    test1Status: cols.TEST_1_STATUS - 1,
+    test2Status: cols.TEST_2_STATUS - 1,
+    overallStatus: cols.OVERALL_STATUS - 1,
+    teardownAction: cols.TEARDOWN_ACTION - 1,
+    diagnostics: cols.DIAGNOSTICS - 1,
+    engComments: cols.ENG_COMMENTS - 1
+  };
+
+  if (!headerRow) return map;
+
+  for (var i = 0; i < headerRow.length; i++) {
+    var h = String(headerRow[i] || "").trim().toLowerCase();
+    if (h.includes("true serial") || h.includes("serial number")) map.trueSerial = i;
+    else if (h.includes("base model")) map.baseModel = i;
+    else if (h.includes("rod force")) map.rodForce = i;
+    else if (h.includes("comp peak 1") || h.includes("comp 1")) map.comp1 = i;
+    else if (h.includes("reb peak 1") || h.includes("reb 1")) map.reb1 = i;
+    else if (h.includes("comp peak 2") || h.includes("comp 2")) map.comp2 = i;
+    else if (h.includes("reb peak 2") || h.includes("reb 2")) map.reb2 = i;
+    else if (h.includes("comp peak 3") || h.includes("comp 3")) map.comp3 = i;
+    else if (h.includes("reb peak 3") || h.includes("reb 3")) map.reb3 = i;
+    else if (h.includes("test 1 status") || h.includes("test1 status")) map.test1Status = i;
+    else if (h.includes("test 2 status") || h.includes("test2 status")) map.test2Status = i;
+    else if (h.includes("overall status") || h.includes("status")) map.overallStatus = i;
+    else if (h.includes("teardown")) map.teardownAction = i;
+    else if (h.includes("diagnostics")) map.diagnostics = i;
+    else if (h.includes("comments")) map.engComments = i;
+  }
+  return map;
+}
+
+/**
+ * Extracts expected serials from the Work Order spreadsheet and matches against Master_Dyno_Log.
  */
 function renderOperatorTableWithWOAlignment(ss, sheet, woSheet, searchBarcode, partNumber) {
   var ranges = CONFIG.OPERATOR_STATION.RANGES;
-  var cleanBarcode = String(searchBarcode).trim().toLowerCase();
+  var normBarcode = normalizeSerialKey(searchBarcode);
 
   // 1. Extract master serial list directly from the Work Order File
   var woValues = woSheet.getDataRange().getValues();
@@ -194,7 +246,8 @@ function renderOperatorTableWithWOAlignment(ss, sheet, woSheet, searchBarcode, p
   for (var r = 0; r < woValues.length; r++) {
     for (var c = 0; c < woValues[r].length; c++) {
       var cellVal = String(woValues[r][c] || "").trim();
-      if (cellVal.toLowerCase().includes(cleanBarcode) && cellVal !== searchBarcode) {
+      var normCell = normalizeSerialKey(cellVal);
+      if (normBarcode !== "" && normCell.includes(normBarcode) && normCell !== normBarcode) {
         if (!woSerials.includes(cellVal)) {
           woSerials.push(cellVal);
         }
@@ -211,23 +264,26 @@ function renderOperatorTableWithWOAlignment(ss, sheet, woSheet, searchBarcode, p
     return uA - uB;
   });
 
-  // 2. Query Master_Dyno_Log for test results
+  // 2. Index Master_Dyno_Log using normalized serial keys
   var logSheet = ss.getSheetByName(CONFIG.SHEET_NAMES.MASTER_DYNO_LOG);
-  var logCols = CONFIG.COLUMNS.MASTER_DYNO_LOG;
   var logSheetId = logSheet ? logSheet.getSheetId() : null;
-
-  var latestTestsBySerial = {};
+  var latestTestsByNormKey = {};
+  var logMap = null;
 
   if (logSheet) {
     var logData = logSheet.getDataRange().getValues();
-    for (var i = 1; i < logData.length; i++) {
-      var row = logData[i];
-      var trueSerial = String(row[logCols.TRUE_SERIAL - 1] || "").trim();
-      if (trueSerial.toLowerCase().includes(cleanBarcode)) {
-        latestTestsBySerial[trueSerial] = {
-          rowIdx: i + 1,
-          data: row
-        };
+    if (logData.length > 0) {
+      logMap = getLogHeaderIndices(logData[0]);
+      for (var i = 1; i < logData.length; i++) {
+        var row = logData[i];
+        var trueSerial = String(row[logMap.trueSerial] || "").trim();
+        var normKey = normalizeSerialKey(trueSerial);
+        if (normKey !== "") {
+          latestTestsByNormKey[normKey] = {
+            rowIdx: i + 1,
+            data: row
+          };
+        }
       }
     }
   }
@@ -250,20 +306,21 @@ function renderOperatorTableWithWOAlignment(ss, sheet, woSheet, searchBarcode, p
   var test2PassCount = 0;
   var test2FailCount = 0;
 
-  // 3. Build mapped rows using WO Serials as Master Truth
+  // 3. Build mapped rows by matching WO Serials against Normalized Log Keys
   for (var s = 0; s < woSerials.length; s++) {
     var sNum = woSerials[s];
-    var testRecord = latestTestsBySerial[sNum];
+    var normSKey = normalizeSerialKey(sNum);
+    var testRecord = latestTestsByNormKey[normSKey];
 
-    if (testRecord) {
+    if (testRecord && logMap) {
       testedCount++;
       var row = testRecord.data;
       var actualRow = testRecord.rowIdx;
       var rowLink = "#gid=" + logSheetId + "&range=A" + actualRow;
       var serialHyperlinkFormula = '=HYPERLINK("' + rowLink + '", "' + sNum + '")';
 
-      var t1Status = String(row[logCols.TEST_1_STATUS - 1] || "").trim();
-      var t2Status = String(row[logCols.TEST_2_STATUS - 1] || "").trim();
+      var t1Status = String(row[logMap.test1Status] || "").trim();
+      var t2Status = String(row[logMap.test2Status] || "").trim();
 
       if (t1Status.toUpperCase() === "PASS") test1PassCount++;
       else if (t1Status.toUpperCase() === "FAIL") test1FailCount++;
@@ -271,32 +328,32 @@ function renderOperatorTableWithWOAlignment(ss, sheet, woSheet, searchBarcode, p
       if (t2Status.toUpperCase() === "PASS") test2PassCount++;
       else if (t2Status.toUpperCase() === "FAIL") test2FailCount++;
 
-      var overallStat = String(row[logCols.OVERALL_STATUS - 1] || "").trim();
-      var teardownAct = String(row[logCols.TEARDOWN_ACTION - 1] || "").trim();
+      var overallStat = String(row[logMap.overallStatus] || "").trim();
+      var teardownAct = String(row[logMap.teardownAction] || "").trim();
       var evalActionCombo = overallStat + (teardownAct ? " / " + teardownAct : "");
 
-      var diagNotes = String(row[logCols.DIAGNOSTICS - 1] || "").trim();
-      var engComm = String(row[logCols.ENG_COMMENTS - 1] || "").trim();
+      var diagNotes = String(row[logMap.diagnostics] || "").trim();
+      var engComm = String(row[logMap.engComments] || "").trim();
       var diagCombo = diagNotes + (engComm ? " | " + engComm : "");
 
-      // ✅ CORRECTED 12-COLUMN MAPPING (Col G = Test 1, Col H = Test 2)
+      // 12-COLUMN TABLE MAPPING (Col G = Test 1, Col H = Test 2)
       var mappedRow = [
-        serialHyperlinkFormula,                     // Col A (1): True Serial (Hyperlink)
-        safeAbsNum(row[logCols.ROD_FORCE - 1]),     // Col B (2): Rod Force (ABS)
-        safeAbsNum(row[logCols.COMP_1 - 1]),        // Col C (3): Low Speed Comp (ABS)
-        safeAbsNum(row[logCols.REB_1 - 1]),         // Col D (4): Low Speed Reb (ABS)
-        safeAbsNum(row[logCols.COMP_2 - 1]),        // Col E (5): Med Speed Comp (ABS)
-        safeAbsNum(row[logCols.REB_2 - 1]),         // Col F (6): Med Speed Reb (ABS)
-        t1Status,                                   // Col G (7): Test 1 Status
-        t2Status,                                   // Col H (8): Test 2 Status
-        safeAbsNum(row[logCols.COMP_3 - 1]),        // Col I (9): High Speed Comp (ABS)
-        safeAbsNum(row[logCols.REB_3 - 1]),         // Col J (10): High Speed Reb (ABS)
-        evalActionCombo,                            // Col K (11): Overall Status / Eval Action
-        diagCombo                                   // Col L (12): Diagnostic Notes
+        serialHyperlinkFormula,               // Col A (1): True Serial (Hyperlink)
+        safeAbsNum(row[logMap.rodForce]),     // Col B (2): Rod Force (ABS)
+        safeAbsNum(row[logMap.comp1]),        // Col C (3): Low Speed Comp (ABS)
+        safeAbsNum(row[logMap.reb1]),         // Col D (4): Low Speed Reb (ABS)
+        safeAbsNum(row[logMap.comp2]),        // Col E (5): Med Speed Comp (ABS)
+        safeAbsNum(row[logMap.reb2]),         // Col F (6): Med Speed Reb (ABS)
+        t1Status,                             // Col G (7): Test 1 Status
+        t2Status,                             // Col H (8): Test 2 Status
+        safeAbsNum(row[logMap.comp3]),        // Col I (9): High Speed Comp (ABS)
+        safeAbsNum(row[logMap.reb3]),         // Col J (10): High Speed Reb (ABS)
+        evalActionCombo,                      // Col K (11): Overall Status / Eval Action
+        diagCombo                             // Col L (12): Diagnostic Notes
       ];
       rowsToDisplay.push(mappedRow);
     } else {
-      // Missing test result: display serial with empty data slots
+      // Un-tested unit: displays serial with blank data slots
       rowsToDisplay.push([sNum, "", "", "", "", "", "", "", "", "", "", ""]);
     }
   }
