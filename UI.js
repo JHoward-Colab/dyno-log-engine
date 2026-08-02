@@ -36,6 +36,16 @@ function cleanKey(val) {
 }
 
 /**
+ * Safely fetches column value from a log row using CONFIG key or 0-indexed fallback.
+ */
+function getLogVal(row, colConfigProp, defaultIndex) {
+  if (colConfigProp && !isNaN(colConfigProp) && colConfigProp > 0) {
+    return row[colConfigProp - 1];
+  }
+  return row[defaultIndex];
+}
+
+/**
  * Sets cell A8 text and dynamically formats background & text color based on the status.
  */
 function setA8Status(sheet, statusMessage) {
@@ -162,11 +172,12 @@ function manageOperatorStation(e) {
 }  
 
 /**
- * Populates spec limit cells (B22:F23) with positive absolute values using clean key matching.
+ * Direct lookup helper for spec limits from Part_Reference_Matrix.
  */
-function populateSpecLimits(ss, sheet, programOrPart) {
+function getSpecLimitsFromMatrix(ss, programOrPart) {
+  var limits = { c1Min: NaN, c1Max: NaN, r1Min: NaN, r1Max: NaN, c2Min: NaN, c2Max: NaN, r2Min: NaN, r2Max: NaN };
   var refSheet = ss.getSheetByName(CONFIG.SHEET_NAMES.PART_REFERENCE_MATRIX);
-  if (!refSheet || !programOrPart) return;
+  if (!refSheet || !programOrPart) return limits;
 
   var refData = refSheet.getDataRange().getValues();
   var refCols = CONFIG.COLUMNS.PART_REFERENCE_MATRIX;
@@ -181,15 +192,13 @@ function populateSpecLimits(ss, sheet, programOrPart) {
     }
   }
 
-  if (!refRow) return;
-
-  var ranges = CONFIG.OPERATOR_STATION.RANGES;
+  if (!refRow) return limits;
 
   function getAbsPair(minVal, maxVal) {
-    if (minVal === "" || maxVal === "" || minVal === null || maxVal === null) return { min: "", max: "" };
+    if (minVal === "" || maxVal === "" || minVal === null || maxVal === null) return { min: NaN, max: NaN };
     var a = Math.abs(parseFloat(minVal));
     var b = Math.abs(parseFloat(maxVal));
-    if (isNaN(a) || isNaN(b)) return { min: "", max: "" };
+    if (isNaN(a) || isNaN(b)) return { min: NaN, max: NaN };
     return { min: Math.min(a, b), max: Math.max(a, b) };
   }
 
@@ -198,23 +207,36 @@ function populateSpecLimits(ss, sheet, programOrPart) {
   var c2 = getAbsPair(refRow[refCols.COMP_2_MIN - 1], refRow[refCols.COMP_2_MAX - 1]);
   var r2 = getAbsPair(refRow[refCols.REB_2_MIN - 1], refRow[refCols.REB_2_MAX - 1]);
 
-  sheet.getRange(ranges.LIMIT_C1_MIN).setValue(c1.min);
-  sheet.getRange(ranges.LIMIT_C1_MAX).setValue(c1.max);
-  sheet.getRange(ranges.LIMIT_R1_MIN).setValue(r1.min);
-  sheet.getRange(ranges.LIMIT_R1_MAX).setValue(r1.max);
+  return {
+    c1Min: c1.min, c1Max: c1.max,
+    r1Min: r1.min, r1Max: r1.max,
+    c2Min: c2.min, c2Max: c2.max,
+    r2Min: r2.min, r2Max: r2.max
+  };
+}
 
-  sheet.getRange(ranges.LIMIT_C2_MIN).setValue(c2.min);
-  sheet.getRange(ranges.LIMIT_C2_MAX).setValue(c2.max);
-  sheet.getRange(ranges.LIMIT_R2_MIN).setValue(r2.min);
-  sheet.getRange(ranges.LIMIT_R2_MAX).setValue(r2.max);
+/**
+ * Populates spec limit cells (B22:F23) with positive absolute values using clean key matching.
+ */
+function populateSpecLimits(ss, sheet, programOrPart) {
+  var limits = getSpecLimitsFromMatrix(ss, programOrPart);
+  var ranges = CONFIG.OPERATOR_STATION.RANGES;
 
-  sheet.getRange(ranges.LIMIT_SLOPE).setValue(safeAbsNum(refRow[refCols.SLOPE_1_MIN - 1]));
+  sheet.getRange(ranges.LIMIT_C1_MIN).setValue(isNaN(limits.c1Min) ? "" : limits.c1Min);
+  sheet.getRange(ranges.LIMIT_C1_MAX).setValue(isNaN(limits.c1Max) ? "" : limits.c1Max);
+  sheet.getRange(ranges.LIMIT_R1_MIN).setValue(isNaN(limits.r1Min) ? "" : limits.r1Min);
+  sheet.getRange(ranges.LIMIT_R1_MAX).setValue(isNaN(limits.r2Max) ? "" : limits.r1Max);
+
+  sheet.getRange(ranges.LIMIT_C2_MIN).setValue(isNaN(limits.c2Min) ? "" : limits.c2Min);
+  sheet.getRange(ranges.LIMIT_C2_MAX).setValue(isNaN(limits.c2Max) ? "" : limits.c2Max);
+  sheet.getRange(ranges.LIMIT_R2_MIN).setValue(isNaN(limits.r2Min) ? "" : limits.r2Min);
+  sheet.getRange(ranges.LIMIT_R2_MAX).setValue(isNaN(limits.r2Max) ? "" : limits.r2Max);
 }
 
 /**
  * Queries Master_Dyno_Log directly for records matching the scanned barcode prefix.
- * Deduplicates by True Serial (keeping the latest test entry), maps Col V & W to Col G & H,
- * highlights specific failed force speeds as RED BOLD, and dynamically updates Cell A8.
+ * Maps Col X (Overall Status) to Col I, Col Z (Evaluation Action) to Col J,
+ * highlights specific out-of-spec force values, and updates Cell A8.
  */
 function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber) {
   var logSheet = ss.getSheetByName(CONFIG.SHEET_NAMES.MASTER_DYNO_LOG);
@@ -226,35 +248,38 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber)
     return;
   }
 
-  var logCols = CONFIG.COLUMNS.MASTER_DYNO_LOG;
+  var logCols = CONFIG.COLUMNS.MASTER_DYNO_LOG || {};
   var ranges = CONFIG.OPERATOR_STATION.RANGES;
   var logSheetId = logSheet.getSheetId();
 
-  // Read active spec limits directly from sheet cells B22:F23
-  var c1Min = parseFloat(sheet.getRange(ranges.LIMIT_C1_MIN).getValue());
-  var c1Max = parseFloat(sheet.getRange(ranges.LIMIT_C1_MAX).getValue());
-  var r1Min = parseFloat(sheet.getRange(ranges.LIMIT_R1_MIN).getValue());
-  var r1Max = parseFloat(sheet.getRange(ranges.LIMIT_R1_MAX).getValue());
+  // Read active spec limits from sheet cells B22:F23 with fallback to matrix lookup
+  var limits = {
+    c1Min: parseFloat(sheet.getRange(ranges.LIMIT_C1_MIN).getValue()),
+    c1Max: parseFloat(sheet.getRange(ranges.LIMIT_C1_MAX).getValue()),
+    r1Min: parseFloat(sheet.getRange(ranges.LIMIT_R1_MIN).getValue()),
+    r1Max: parseFloat(sheet.getRange(ranges.LIMIT_R1_MAX).getValue()),
+    c2Min: parseFloat(sheet.getRange(ranges.LIMIT_C2_MIN).getValue()),
+    c2Max: parseFloat(sheet.getRange(ranges.LIMIT_C2_MAX).getValue()),
+    r2Min: parseFloat(sheet.getRange(ranges.LIMIT_R2_MIN).getValue()),
+    r2Max: parseFloat(sheet.getRange(ranges.LIMIT_R2_MAX).getValue())
+  };
 
-  var c2Min = parseFloat(sheet.getRange(ranges.LIMIT_C2_MIN).getValue());
-  var c2Max = parseFloat(sheet.getRange(ranges.LIMIT_C2_MAX).getValue());
-  var r2Min = parseFloat(sheet.getRange(ranges.LIMIT_R2_MIN).getValue());
-  var r2Max = parseFloat(sheet.getRange(ranges.LIMIT_R2_MAX).getValue());
+  // Fail-safe matrix limit lookup if cells are NaN
+  if (isNaN(limits.c1Min) || isNaN(limits.c1Max)) {
+    var directLimits = getSpecLimitsFromMatrix(ss, partNumber || searchBarcode);
+    if (!isNaN(directLimits.c1Min)) limits = directLimits;
+  }
 
   var cleanBarcodeStr = cleanKey(searchBarcode);
   var cleanPartStr = cleanKey(partNumber);
-
-  // Determine Col V (22) and Col W (23) column indices (0-indexed)
-  var colTest1Idx = (logCols && logCols.TEST_1_STATUS) ? (logCols.TEST_1_STATUS - 1) : 21; // Col V
-  var colTest2Idx = (logCols && logCols.TEST_2_STATUS) ? (logCols.TEST_2_STATUS - 1) : 22; // Col W
 
   // 1. First Pass: Collect matching entries and keep only the LATEST entry per serial
   var latestLogBySerial = {};
 
   for (var r = 1; r < logData.length; r++) {
     var row = logData[r];
-    var trueSerial = String(row[logCols.TRUE_SERIAL - 1] || "").trim();
-    var baseModel = cleanKey(row[logCols.BASE_MODEL - 1]);
+    var trueSerial = String(getLogVal(row, logCols.TRUE_SERIAL, 0) || "").trim();
+    var baseModel = cleanKey(getLogVal(row, logCols.BASE_MODEL, 1));
     var cleanSerial = cleanKey(trueSerial);
 
     var isMatch = false;
@@ -296,48 +321,42 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber)
     var rowLink = "#gid=" + logSheetId + "&range=A" + actualSheetRow;
     var serialHyperlinkFormula = '=HYPERLINK("' + rowLink + '", "' + trueSerial + '")';
 
-    var t1Status = String(row[colTest1Idx] || "").trim();
-    var t2Status = String(row[colTest2Idx] || "").trim();
+    var t1Status = String(getLogVal(row, logCols.TEST_1_STATUS, 21) || "").trim(); // Log Col V (idx 21)
+    var t2Status = String(getLogVal(row, logCols.TEST_2_STATUS, 22) || "").trim(); // Log Col W (idx 22)
 
     var t1Upper = t1Status.toUpperCase();
     var t2Upper = t2Status.toUpperCase();
 
-    // Flexible string check for any variation of "FAIL"
-    if (t1Upper.includes("FAIL")) {
-      test1FailCount++;
-    }
-    if (t2Upper.includes("FAIL")) {
-      test2FailCount++;
-    }
+    if (t1Upper.includes("FAIL")) test1FailCount++;
+    if (t2Upper.includes("FAIL")) test2FailCount++;
 
-    var overallStat = String(row[logCols.OVERALL_STATUS - 1] || "").trim();
-    var teardownAct = String(row[logCols.TEARDOWN_ACTION - 1] || "").trim();
-    var evalActionCombo = overallStat + (teardownAct ? " / " + teardownAct : "");
+    // Explicit Log Column Bindings for UI Table
+    var overallStat = String(getLogVal(row, logCols.OVERALL_STATUS, 23) || "").trim();    // Log Col X (idx 23) -> UI Col I
+    var evalAction  = String(getLogVal(row, logCols.EVALUATION_ACTION, 25) || "").trim(); // Log Col Z (idx 25) -> UI Col J
+    var teardownAct = String(getLogVal(row, logCols.TEARDOWN_ACTION, 24) || "").trim();   // Log Col Y (idx 24)
 
-    var diagNotes = String(row[logCols.DIAGNOSTICS - 1] || "").trim();
-    var engComm = String(row[logCols.ENG_COMMENTS - 1] || "").trim();
-    var diagCombo = diagNotes + (engComm ? " | " + engComm : "");
+    var fullEvalAction = evalAction + (teardownAct ? " / " + teardownAct : "");
 
     // 12-COLUMN TABLE MAPPING
     var mappedRow = [
-      serialHyperlinkFormula,                     // Col A (1): True Serial (Hyperlink)
-      safeAbsNum(row[logCols.ROD_FORCE - 1]),     // Col B (2): Rod Force (ABS)
-      safeAbsNum(row[logCols.COMP_1 - 1]),        // Col C (3): Low Speed Comp (ABS)
-      safeAbsNum(row[logCols.REB_1 - 1]),         // Col D (4): Low Speed Reb (ABS)
-      safeAbsNum(row[logCols.COMP_2 - 1]),        // Col E (5): Med Speed Comp (ABS)
-      safeAbsNum(row[logCols.REB_2 - 1]),         // Col F (6): Med Speed Reb (ABS)
-      t1Status,                                   // Col G (7): Test 1 Status (Log Col V)
-      t2Status,                                   // Col H (8): Test 2 Status (Log Col W)
-      safeAbsNum(row[logCols.COMP_3 - 1]),        // Col I (9): High Speed Comp (ABS)
-      safeAbsNum(row[logCols.REB_3 - 1]),         // Col J (10): High Speed Reb (ABS)
-      evalActionCombo,                            // Col K (11): Overall Status / Eval Action
-      diagCombo                                   // Col L (12): Diagnostic Notes
+      serialHyperlinkFormula,                             // Col A (1): True Serial (Hyperlink)
+      safeAbsNum(getLogVal(row, logCols.ROD_FORCE, 7)),   // Col B (2): Rod Force (ABS)
+      safeAbsNum(getLogVal(row, logCols.COMP_1, 8)),      // Col C (3): Low Speed Comp (ABS)
+      safeAbsNum(getLogVal(row, logCols.REB_1, 9)),       // Col D (4): Low Speed Reb (ABS)
+      safeAbsNum(getLogVal(row, logCols.COMP_2, 10)),     // Col E (5): Med Speed Comp (ABS)
+      safeAbsNum(getLogVal(row, logCols.REB_2, 11)),      // Col F (6): Med Speed Reb (ABS)
+      t1Status,                                           // Col G (7): Test 1 Status (Log Col V)
+      t2Status,                                           // Col H (8): Test 2 Status (Log Col W)
+      overallStat,                                        // Col I (9): Overall Status (Log Col X)
+      fullEvalAction,                                     // Col J (10): Evaluation Action (Log Col Z)
+      safeAbsNum(getLogVal(row, logCols.COMP_3, 12)),     // Col K (11): High Speed Comp (ABS)
+      safeAbsNum(getLogVal(row, logCols.REB_3, 13))      // Col L (12): High Speed Reb (ABS)
     ];
 
     rowsToDisplay.push(mappedRow);
   }
 
-  // 3. Accurate Cell A8 Work Order Status Evaluation with dynamic formatting
+  // 3. Accurate Cell A8 Work Order Status Evaluation
   var statusMessage = "";
   if (rowsToDisplay.length === 0) {
     statusMessage = "PENDING TESTING";
@@ -361,11 +380,11 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber)
   // 4. Write Mapped Data Values & Formulas
   outputRange.setValues(rowsToDisplay);
 
-  // 5. Set Decimal Formatting (X.X format on force columns B..F and I..J, skipping G & H)
-  sheet.getRange(startRow, 2, numRows, 5).setNumberFormat("0.0"); // Cols B..F
-  sheet.getRange(startRow, 9, numRows, 2).setNumberFormat("0.0"); // Cols I..J
+  // 5. Set Decimal Formatting (X.X format on force columns B..F and K..L)
+  sheet.getRange(startRow, 2, numRows, 5).setNumberFormat("0.0");  // Cols B..F
+  sheet.getRange(startRow, 11, numRows, 2).setNumberFormat("0.0"); // Cols K..L
 
-  // 6. Build Explicit Formatting Arrays (Failed forces -> BOLD Dark Red on Light Red, Passed -> Normal Black on White)
+  // 6. Build Explicit Formatting Arrays (Failed forces & statuses -> BOLD Dark Red on Light Red)
   var bgColors = [];
   var fontColors = [];
   var fontWeights = [];
@@ -383,14 +402,14 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber)
 
       // Evaluate numeric force columns against active spec limits
       if (!isNaN(val)) {
-        if (cIdx === 2 && ((!isNaN(c1Min) && val < c1Min) || (!isNaN(c1Max) && val > c1Max))) isOut = true; // Low Comp (Col C)
-        if (cIdx === 3 && ((!isNaN(r1Min) && val < r1Min) || (!isNaN(r1Max) && val > r1Max))) isOut = true; // Low Reb (Col D)
-        if (cIdx === 4 && ((!isNaN(c2Min) && val < c2Min) || (!isNaN(c2Max) && val > c2Max))) isOut = true; // Med Comp (Col E)
-        if (cIdx === 5 && ((!isNaN(r2Min) && val < r2Min) || (!isNaN(r2Max) && val > r2Max))) isOut = true; // Med Reb (Col F)
+        if (cIdx === 2 && ((!isNaN(limits.c1Min) && val < limits.c1Min) || (!isNaN(limits.c1Max) && val > limits.c1Max))) isOut = true; // Low Comp (Col C)
+        if (cIdx === 3 && ((!isNaN(limits.r1Min) && val < limits.r1Min) || (!isNaN(limits.r1Max) && val > limits.r1Max))) isOut = true; // Low Reb (Col D)
+        if (cIdx === 4 && ((!isNaN(limits.c2Min) && val < limits.c2Min) || (!isNaN(limits.c2Max) && val > limits.c2Max))) isOut = true; // Med Comp (Col E)
+        if (cIdx === 5 && ((!isNaN(limits.r2Min) && val < limits.r2Min) || (!isNaN(limits.r2Max) && val > limits.r2Max))) isOut = true; // Med Reb (Col F)
       }
 
-      // Evaluate status text columns (Cols G and H)
-      if ((cIdx === 6 || cIdx === 7) && strVal.includes("FAIL")) {
+      // Highlight status columns (Cols G, H, I) if they contain FAIL
+      if ((cIdx === 6 || cIdx === 7 || cIdx === 8) && strVal.includes("FAIL")) {
         isOut = true;
       }
 
