@@ -359,6 +359,7 @@ function retroactiveLogRecalculate() {
     var prog = String(logData[r][hMap.programName] || "").trim();
     var serial = String(logData[r][hMap.trueSerial] || "").trim();
     var baseModel = String(logData[r][hMap.baseModel] || "").trim().toLowerCase().replace(/[-_\s]/g, "");
+    var overallStatus = String(logData[r][hMap.overallStatus] || "").toUpperCase().trim();
     if (logData[r][0] === "") continue;
     
     if (serial !== "") {
@@ -374,17 +375,27 @@ function retroactiveLogRecalculate() {
       batchGroups[batchId].rowReferences.push(r);
     }
     
-    // Resolve group key via DYNAMIC_KEY lookup or fallback to program name
+    // ---------------------------------------------------------------------
+    // FILTER & DEDUPLICATE FOR SPC BASELINE POOL
+    // ---------------------------------------------------------------------
     var resolvedGroupKey = modelToDynamicKey[baseModel] || prog;
-    if (resolvedGroupKey !== "") {
-      if (!historicalGroups[resolvedGroupKey]) historicalGroups[resolvedGroupKey] = [];
-      logData[r]._rowIdx = r + 1; 
-      historicalGroups[resolvedGroupKey].push(logData[r]);
+    var isPassingRun = overallStatus.indexOf("PASS") !== -1;
+
+    if (resolvedGroupKey !== "" && isPassingRun) {
+      if (!historicalGroups[resolvedGroupKey]) {
+        historicalGroups[resolvedGroupKey] = {};
+      }
+      logData[r]._rowIdx = r + 1;
+      
+      // Key by serial number to ensure only the latest passing run per unique unit is counted
+      var serialKey = serial !== "" ? serial.toLowerCase() : ("row_" + (r + 1));
+      historicalGroups[resolvedGroupKey][serialKey] = logData[r];
     }
   }
   
   for (var pName in historicalGroups) {
-    var pool = historicalGroups[pName];
+    var serialMap = historicalGroups[pName];
+    var pool = Object.keys(serialMap).map(function(k) { return serialMap[k]; });
     var countN = pool.length;
     var cleanPName = pName.replace(/[-_\s]/g, "").toLowerCase();
     
