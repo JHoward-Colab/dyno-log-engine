@@ -363,6 +363,7 @@ function retroactiveLogRecalculate() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var logSheet = ss.getSheetByName("Master_Dyno_Log");
   var refSheet = ss.getSheetByName("Part_Reference_Matrix");
+  var regSheet = ss.getSheetByName("Program_Registry");
   if (!logSheet || !refSheet) return;
   
   var logRange = logSheet.getDataRange();
@@ -376,10 +377,28 @@ function retroactiveLogRecalculate() {
 
   var batchGroups = {};
   var historicalGroups = {};
+
+  // Build PROGRAM_NAME / BASE_MODEL -> DYNAMIC_KEY mapping from Program_Registry
+  var modelToDynamicKey = {};
+  if (regSheet) {
+    var regValues = regSheet.getDataRange().getValues();
+    for (var k = 1; k < regValues.length; k++) {
+      var regProgName = String(regValues[k][0] || "").trim().toLowerCase().replace(/[-_\s]/g, ""); // Col A
+      var regDynKey   = String(regValues[k][1] || "").trim();                                     // Col B
+      var regBaseModel= String(regValues[k][2] || "").trim().toLowerCase().replace(/[-_\s]/g, ""); // Col C
+      
+      var targetKey = regDynKey || regValues[k][0] || regValues[k][2];
+      if (regProgName) modelToDynamicKey[regProgName] = targetKey;
+      if (regBaseModel) modelToDynamicKey[regBaseModel] = targetKey;
+    }
+  }
   
+  // Pass 1: Cohort Batch & Historical Program Grouping
   for (var r = 1; r < logData.length; r++) {
     var prog = String(logData[r][hMap.programName] || "").trim();
     var serial = String(logData[r][hMap.trueSerial] || "").trim();
+    var baseModel = String(logData[r][hMap.baseModel] || "").trim().toLowerCase().replace(/[-_\s]/g, "");
+    var cleanProg = prog.toLowerCase().replace(/[-_\s]/g, "");
     if (logData[r][0] === "") continue;
     
     if (serial !== "") {
@@ -395,13 +414,16 @@ function retroactiveLogRecalculate() {
       batchGroups[batchId].rowReferences.push(r);
     }
     
-    if (prog !== "") {
-      if (!historicalGroups[prog]) historicalGroups[prog] = [];
+    // Group historical logs using mapped Dynamic Key fallback
+    var resolvedGroupKey = modelToDynamicKey[cleanProg] || modelToDynamicKey[baseModel] || prog;
+    if (resolvedGroupKey !== "") {
+      if (!historicalGroups[resolvedGroupKey]) historicalGroups[resolvedGroupKey] = [];
       logData[r]._rowIdx = r + 1; 
-      historicalGroups[prog].push(logData[r]);
+      historicalGroups[resolvedGroupKey].push(logData[r]);
     }
   }
   
+  // Pass 2: Matrix Baseline & Speed Bucketing
   for (var pName in historicalGroups) {
     var pool = historicalGroups[pName];
     var countN = pool.length;
@@ -531,6 +553,8 @@ function retroactiveLogRecalculate() {
   for (var r = 1; r < logData.length; r++) {
     var pName = String(logData[r][hMap.programName] || "").trim();
     var serial = String(logData[r][hMap.trueSerial] || "").trim();
+    var baseModel = String(logData[r][hMap.baseModel] || "").trim().toLowerCase().replace(/[-_\s]/g, "");
+    var cleanPName = pName.toLowerCase().replace(/[-_\s]/g, "");
     var batchId = serial.split("-")[0].trim();
     
     var test1Result = "INITIALIZING"; var test2Result = "INITIALIZING"; var finalStatus = "PASS";
@@ -538,11 +562,14 @@ function retroactiveLogRecalculate() {
     var failTags = [];
     
     if (pName && logData[r][0] !== "") {
-      var cleanPName = pName.replace(/[-_\s]/g, "").toLowerCase();
+      // Resolve Dynamic Key lookup from Program_Registry
+      var resolvedDynamicKey = modelToDynamicKey[cleanPName] || modelToDynamicKey[baseModel] || pName;
+      var cleanResolvedKey  = resolvedDynamicKey.toLowerCase().replace(/[-_\s]/g, "");
+      
       var refRow = null;
       for (var mx = 1; mx < refData.length; mx++) {
         var mKey = String(refData[mx][0] || "").trim().replace(/[-_\s]/g, "").toLowerCase();
-        if (mKey && (mKey === cleanPName || cleanPName.indexOf(mKey) !== -1 || mKey.indexOf(cleanPName) !== -1)) {
+        if (mKey && (mKey === cleanResolvedKey || cleanResolvedKey.indexOf(mKey) !== -1 || mKey.indexOf(cleanResolvedKey) !== -1)) {
           refRow = refData[mx]; break;
         }
       }
@@ -597,7 +624,6 @@ function retroactiveLogRecalculate() {
         test2Result = t2Pass ? "PASS" : "FAIL (OUTLIER)";
       }
       
-      // Filter duplicate strings from failure keys safely
       var uniqueFailTags = [];
       for (var f = 0; f < failTags.length; f++) {
         if (uniqueFailTags.indexOf(failTags[f]) === -1) uniqueFailTags.push(failTags[f]);
