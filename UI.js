@@ -378,39 +378,68 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber)
   var fontWeights = [];
 
   for (var rIdx = 0; rIdx < numRows; rIdx++) {
-    var rowBg = [];
-    var rowFont = [];
-    var rowWeight = [];
+    var rowBg = ["#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF"];
+    var rowFont = ["#000000", "#000000", "#000000", "#000000", "#000000", "#000000", "#000000", "#000000", "#000000", "#000000", "#000000", "#000000"];
+    var rowWeight = ["normal", "normal", "normal", "normal", "normal", "normal", "normal", "normal", "normal", "normal", "normal", "normal"];
     var rowData = rowsToDisplay[rIdx];
 
-    for (var cIdx = 0; cIdx < numCols; cIdx++) {
-      var val = parseFloat(rowData[cIdx]);
-      var strVal = String(rowData[cIdx] || "").toUpperCase();
-      var isOut = false;
+    var t1StatusStr    = String(rowData[6] || "").toUpperCase(); // Col G
+    var t2StatusStr    = String(rowData[7] || "").toUpperCase(); // Col H
+    var overallStatStr = String(rowData[8] || "").toUpperCase(); // Col I
+    var evalActionStr  = String(rowData[9] || "").toLowerCase(); // Col J
+    var diagnosticsStr = String(rowData[10] || "");              // Col K
 
-      // Evaluate numeric force columns against active spec limits
-      if (!isNaN(val)) {
-        if (cIdx === 2 && ((!isNaN(limits.c1Min) && val < limits.c1Min) || (!isNaN(limits.c1Max) && val > limits.c1Max))) isOut = true; // Low Comp (Col C)
-        if (cIdx === 3 && ((!isNaN(limits.r1Min) && val < limits.r1Min) || (!isNaN(limits.r1Max) && val > limits.r1Max))) isOut = true; // Low Reb (Col D)
-        if (cIdx === 4 && ((!isNaN(limits.c2Min) && val < limits.c2Min) || (!isNaN(limits.c2Max) && val > limits.c2Max))) isOut = true; // Med Comp (Col E)
-        if (cIdx === 5 && ((!isNaN(limits.r2Min) && val < limits.r2Min) || (!isNaN(limits.r2Max) && val > limits.r2Max))) isOut = true; // Med Reb (Col F)
+    var skipHighlight = evalActionStr.includes("approved") || evalActionStr.includes("management") || evalActionStr.includes("no issue found");
+
+    // 🚀 RELIABLE FINGERPRINT PARSER ENGINE FOR OUTLIER CELL HIGHLIGHTS (from production monolith)
+    var applyFaultHighlight = function(colIndex) {
+      rowFont[colIndex] = "#FF0000";       // Bold Red Text
+      rowWeight[colIndex] = "bold";        
+      rowBg[colIndex] = "#FADBD8";         // Soft Red Background Tint
+    };
+
+    if (!skipHighlight) {
+      // 1. Diagnostic Fingerprint Tag Checks (from Engine)
+      if (!diagnosticsStr.includes("✅")) {
+        if (diagnosticsStr.indexOf("[RF_FAIL]") !== -1)    applyFaultHighlight(1); // Col B (Rod Force)
+        if (diagnosticsStr.indexOf("[C1_FAIL]") !== -1)    applyFaultHighlight(2); // Col C (Low Comp)
+        if (diagnosticsStr.indexOf("[R1_FAIL]") !== -1)    applyFaultHighlight(3); // Col D (Low Reb)
+        if (diagnosticsStr.indexOf("[C2_FAIL]") !== -1)    applyFaultHighlight(4); // Col E (Med Comp)
+        if (diagnosticsStr.indexOf("[R2_FAIL]") !== -1)    applyFaultHighlight(5); // Col F (Med Reb)
+        if (diagnosticsStr.indexOf("[SLOPE_FAIL]") !== -1) { applyFaultHighlight(2); applyFaultHighlight(3); }
       }
 
-      // Highlight status columns (Cols G, H, I) if they contain FAIL
-      if ((cIdx === 6 || cIdx === 7 || cIdx === 8) && strVal.includes("FAIL")) {
-        isOut = true;
-      }
+      // 2. Direct Numeric Spec Limit Checks against active limits (B22:F23)
+      var c1Val = parseFloat(rowData[2]);
+      var r1Val = parseFloat(rowData[3]);
+      var c2Val = parseFloat(rowData[4]);
+      var r2Val = parseFloat(rowData[5]);
 
-      if (isOut) {
-        rowBg.push("#FFCCCC");
-        rowFont.push("#990000");
-        rowWeight.push("bold");
-      } else {
-        rowBg.push("#FFFFFF");
-        rowFont.push("#000000");
-        rowWeight.push("normal");
-      }
+      if (!isNaN(c1Val) && ((!isNaN(limits.c1Min) && c1Val < limits.c1Min) || (!isNaN(limits.c1Max) && c1Val > limits.c1Max))) applyFaultHighlight(2);
+      if (!isNaN(r1Val) && ((!isNaN(limits.r1Min) && r1Val < limits.r1Min) || (!isNaN(limits.r1Max) && r1Val > limits.r1Max))) applyFaultHighlight(3);
+      if (!isNaN(c2Val) && ((!isNaN(limits.c2Min) && c2Val < limits.c2Min) || (!isNaN(limits.c2Max) && c2Val > limits.c2Max))) applyFaultHighlight(4);
+      if (!isNaN(r2Val) && ((!isNaN(limits.r2Min) && r2Val < limits.r2Min) || (!isNaN(limits.r2Max) && r2Val > limits.r2Max))) applyFaultHighlight(5);
     }
+
+    // Status Column Formats (Cols G, H, I)
+    if (t1StatusStr.includes("FAIL")) {
+      rowBg[6] = "#FADBD8"; rowFont[6] = "#C0392B"; rowWeight[6] = "bold";
+    } else if (t1StatusStr.includes("PASS")) {
+      rowBg[6] = "#D4EFDF"; rowFont[6] = "#196F3D";
+    }
+
+    if (t2StatusStr.includes("FAIL")) {
+      rowBg[7] = "#FADBD8"; rowFont[7] = "#C0392B"; rowWeight[7] = "bold";
+    } else if (t2StatusStr.includes("PASS")) {
+      rowBg[7] = "#D4EFDF"; rowFont[7] = "#196F3D";
+    }
+
+    if (overallStatStr.includes("FAIL")) {
+      rowBg[8] = "#C0392B"; rowFont[8] = "#FFFFFF"; rowWeight[8] = "bold";
+    } else if (overallStatStr.includes("OVERRIDE") || overallStatStr.includes("PASS")) {
+      rowBg[8] = "#D4EFDF"; rowFont[8] = "#196F3D"; rowWeight[8] = "bold";
+    }
+
     bgColors.push(rowBg);
     fontColors.push(rowFont);
     fontWeights.push(rowWeight);
