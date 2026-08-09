@@ -601,7 +601,8 @@ function retroactiveLogRecalculate() {
     var batchId = serial.split("-")[0].trim();
     
     var test1Result = "INITIALIZING"; var test2Result = "INITIALIZING"; var finalStatus = "PASS";
-    var diagnosticNotes = "✅ SHOCK IS WITHIN TOLERANCE."; var extNotes = String(logData[r][hMap.diagnostics] || "").trim();
+    var evalAction = String(logData[r][hMap.evaluationAction] || "").trim();
+    var engComm = String(logData[r][hMap.engComments] || "").trim();
     var failTags = [];
     
     if (pName && logData[r][0] !== "") {
@@ -672,14 +673,14 @@ function retroactiveLogRecalculate() {
         if (uniqueFailTags.indexOf(failTags[f]) === -1) uniqueFailTags.push(failTags[f]);
       }
       
-      var cleanExt = extNotes.toLowerCase();
+      var cleanExt = (evalAction + " " + engComm).toLowerCase();
       var globalPass = (test1Result === "INITIALIZING" || !test1Result.includes("FAIL")) && (test2Result === "INITIALIZING" || !test2Result.includes("FAIL"));
-      diagnosticNotes = globalPass ? "✅ SHOCK IS WITHIN TOLERANCE." : "❌ ERROR: " + uniqueFailTags.join(" ") + " | " + defectAnalysis;
+      var diagnosticNotes = globalPass ? "✅ SHOCK IS WITHIN TOLERANCE." : "❌ ERROR: " + uniqueFailTags.join(" ") + " | " + defectAnalysis;
       
-      if (cleanExt.includes("approved") || cleanExt.includes("management")) {
+      if (cleanExt.includes("approved") || cleanExt.includes("management") || cleanExt.includes("override")) {
         test1Result = "PASS (OVERRIDE)"; test2Result = "PASS (OVERRIDE)"; finalStatus = "PASS (OVERRIDE)";
         diagnosticNotes = "👔 DISCRETIONARY CLEAR: Released via Management Sign-off.";
-      } else if (cleanExt.includes("no issue found")) {
+      } else if (cleanExt.includes("no issue found") || cleanExt.includes("re-tested pass") || cleanExt.includes("validated")) {
         test1Result = "PASS"; test2Result = "PASS"; finalStatus = "PASS";
         diagnosticNotes = "🛠️ TEARDOWN VALIDATED: Assembly clear.";
       } else if (!globalPass) {

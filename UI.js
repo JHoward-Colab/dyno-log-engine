@@ -391,7 +391,7 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber)
 
     var skipHighlight = evalActionStr.includes("approved") || evalActionStr.includes("management") || evalActionStr.includes("no issue found");
 
-    // 🚀 RELIABLE FINGERPRINT PARSER ENGINE FOR OUTLIER CELL HIGHLIGHTS
+    // RELIABLE FINGERPRINT PARSER ENGINE FOR OUTLIER CELL HIGHLIGHTS
     var applyFaultHighlight = function(colIndex) {
       rowFont[colIndex] = "#FF0000";       // Bold Red Text
       rowWeight[colIndex] = "bold";        
@@ -452,7 +452,36 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber)
  * Trigger wrapper for spreadsheet edits.
  */
 function installableOnEdit(e) {
-  manageOperatorStation(e);
+  if (!e || !e.range) return;
+
+  var sheet = e.range.getSheet();
+  var sheetName = sheet.getName();
+
+  // 1. Operator Station Barcode Scan Edit
+  if (sheetName === CONFIG.SHEET_NAMES.OPERATOR_STATION) {
+    manageOperatorStation(e);
+    return;
+  }
+
+  // 2. Master Dyno Log Edit (Column W / Col 23 or Column X / Col 24)
+  if (sheetName === CONFIG.SHEET_NAMES.MASTER_DYNO_LOG) {
+    var editedCol = e.range.getColumn();
+    var evalCol = CONFIG.COLUMNS.MASTER_DYNO_LOG.EVALUATION_ACTION || 23;
+    var commCol = CONFIG.COLUMNS.MASTER_DYNO_LOG.ENG_COMMENTS || 24;
+
+    if (editedCol === evalCol || editedCol === commCol) {
+      retroactiveLogRecalculate();
+
+      var ss = e.source || SpreadsheetApp.getActiveSpreadsheet();
+      var opSheet = ss.getSheetByName(CONFIG.SHEET_NAMES.OPERATOR_STATION);
+      if (opSheet) {
+        manageOperatorStation({
+          source: ss,
+          range: opSheet.getRange(CONFIG.OPERATOR_STATION.RANGES.BARCODE_INPUT)
+        });
+      }
+    }
+  }
 }
 
 /**
