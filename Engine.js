@@ -71,13 +71,11 @@ function buildHeaderMap(headerRow) {
   // Dynamic header scanner fallback
   for (var i = 0; i < headerRow.length; i++) {
     var cleanH = String(headerRow[i] || "").toLowerCase().replace(/[^a-z0-9]/g, "");
-    
-    // Explicitly exclude Column V (Diagnostics) from comments scanning
     if (cleanH.indexOf("diagnostic") !== -1) continue;
 
     if (cleanH.indexOf("evaluation") !== -1 || cleanH === "action" || cleanH.indexOf("evalaction") !== -1) {
       map.evaluationAction = i;
-    } else if (cleanH.indexOf("engcomment") !== -1 || cleanH.indexOf("engineeringcomment") !== -1 || cleanH.indexOf("comment") !== -1) {
+    } else if (cleanH.indexOf("engcomment") !== -1 || cleanH.indexOf("engineeringcomment") !== -1 || (cleanH.indexOf("comment") !== -1 && cleanH.indexOf("diagnostic") === -1)) {
       map.engComments = i;
     }
   }
@@ -614,10 +612,10 @@ function retroactiveLogRecalculate() {
     var batchId = serial.split("-")[0].trim();
     
     var test1Result = "INITIALIZING"; var test2Result = "INITIALIZING"; var finalStatus = "PASS";
-    
-    var evalAction = String(logData[r][hMap.evaluationAction] || "").trim();
-    var engComm = String(logData[r][hMap.engComments] || "").trim();
     var failTags = [];
+    
+    // Primary: Column W / Z Evaluation Action
+    var evalAction = String(logData[r][hMap.evaluationAction] || "").trim();
     
     if (pName && logData[r][0] !== "") {
       var resolvedDynamicKey = modelToDynamicKey[baseModel] || modelToDynamicKey[cleanPName] || pName;
@@ -686,27 +684,26 @@ function retroactiveLogRecalculate() {
         if (uniqueFailTags.indexOf(failTags[f]) === -1) uniqueFailTags.push(failTags[f]);
       }
       
-      var cleanExt = (evalAction + " " + engComm).toLowerCase();
+      var evalLower = evalAction.toLowerCase();
       var globalPass = (test1Result === "INITIALIZING" || !test1Result.includes("FAIL")) && (test2Result === "INITIALIZING" || !test2Result.includes("FAIL"));
       var diagnosticNotes = globalPass ? "✅ SHOCK IS WITHIN TOLERANCE." : "❌ ERROR: " + uniqueFailTags.join(" ") + " | " + defectAnalysis;
 
-      var isTeardownClear = cleanExt.includes("no issue") || 
-                            cleanExt.includes("teardown") || 
-                            cleanExt.includes("re-tested") || 
-                            cleanExt.includes("retested") || 
-                            cleanExt.includes("validated");
-
-      var isManagementOverride = cleanExt.includes("management") || 
-                                 cleanExt.includes("discretionary") || 
-                                 (cleanExt.includes("approved") && !isTeardownClear) ||
-                                 (cleanExt.includes("override") && !isTeardownClear);
-
-      if (isManagementOverride) {
-        test1Result = "PASS (OVERRIDE)"; test2Result = "PASS (OVERRIDE)"; finalStatus = "PASS (OVERRIDE)";
+      // Isolated Evaluation Action Logic
+      if (evalLower.indexOf("management") !== -1 || evalLower.indexOf("discretionary") !== -1) {
+        test1Result = "PASS (OVERRIDE)"; 
+        test2Result = "PASS (OVERRIDE)"; 
+        finalStatus = "PASS (OVERRIDE)";
         diagnosticNotes = "👔 DISCRETIONARY CLEAR: Released via Management Sign-off.";
-      } else if (isTeardownClear) {
-        test1Result = "PASS"; test2Result = "PASS"; finalStatus = "PASS";
+      } else if (evalLower.indexOf("teardown") !== -1 || evalLower.indexOf("no issue") !== -1 || evalLower.indexOf("retested") !== -1 || evalLower.indexOf("re-tested") !== -1 || evalLower.indexOf("validated") !== -1) {
+        test1Result = "PASS"; 
+        test2Result = "PASS"; 
+        finalStatus = "PASS";
         diagnosticNotes = "🛠️ TEARDOWN VALIDATED: Assembly clear.";
+      } else if (evalLower.indexOf("override") !== -1 || evalLower.indexOf("approved") !== -1) {
+        test1Result = "PASS (OVERRIDE)"; 
+        test2Result = "PASS (OVERRIDE)"; 
+        finalStatus = "PASS (OVERRIDE)";
+        diagnosticNotes = "⚠️ MANUAL OVERRIDE: Authorized via Engineering Action.";
       } else if (!globalPass) {
         finalStatus = "FAIL";
       }
