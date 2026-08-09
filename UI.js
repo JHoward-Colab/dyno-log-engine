@@ -79,7 +79,6 @@ function manageOperatorStation(e) {
   var barcode = String(sheet.getRange(ranges.BARCODE_INPUT).getValue()).trim();  
     
   if (range.getA1Notation() === ranges.BARCODE_INPUT) {  
-    // 1. Clear Metadata, Panel, Limits, and Results
     sheet.getRange(ranges.CLEAR_METADATA_RANGE).clearContent(); 
     sheet.getRange(ranges.CLEAR_PANEL_RANGE).clearContent(); 
     sheet.getRange(ranges.CLEAR_LIMITS_RANGE).clearContent();
@@ -128,7 +127,6 @@ function manageOperatorStation(e) {
       if (registrySheet && woPartNumber) {  
         var regValues = registrySheet.getDataRange().getValues();  
         var cleanWoPart = cleanKey(woPartNumber);  
-        
         var regCols = CONFIG.COLUMNS.PROGRAM_REGISTRY;
         
         for (var rR = 1; rR < regValues.length; rR++) {  
@@ -141,7 +139,6 @@ function manageOperatorStation(e) {
             matchedProgramName = regProgName;
             matchedDynamicKey = regDynamicKey;
             
-            // Populate Metadata Panel
             sheet.getRange(ranges.CUSTOMER_ACCOUNT_OUTPUT).setValue(regRow[regCols.CUSTOMER_ACCOUNT - 1] || "");
             sheet.getRange(ranges.VEHICLE_SPEC_OUTPUT).setValue(regRow[regCols.VEHICLE_SPEC - 1] || "");
             sheet.getRange(ranges.PROGRAM_NAME_OUTPUT).setValue(regProgName);
@@ -158,10 +155,7 @@ function manageOperatorStation(e) {
         sheet.getRange(ranges.CROSS_CHECK_OUTPUT).setValue("Registry Match Pending");
       }
 
-      // Populate Spec Limits using Dynamic Key or Program Name
       populateSpecLimits(ss, sheet, matchedDynamicKey || matchedProgramName || woPartNumber);
-
-      // Render Dyno Log Records Table
       renderOperatorTableWithFormatting(ss, sheet, searchBarcode, woPartNumber);
 
     } catch(e) {
@@ -198,7 +192,7 @@ function getSpecLimitsFromMatrix(ss, dynamicKeyOrPart) {
     if (minVal === "" || maxVal === "" || minVal === null || maxVal === null) return { min: NaN, max: NaN };
     var a = Math.abs(parseFloat(minVal));
     var b = Math.abs(parseFloat(maxVal));
-    if (isNaN(a) || isNaN(b)) return { min: NaN, max: NaN };
+    if (isNaN(a) || isNaN(b)) return { min: Math.min(a, b), max: Math.max(a, b) };
     return { min: Math.min(a, b), max: Math.max(a, b) };
   }
 
@@ -254,7 +248,6 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber)
   var ranges = CONFIG.OPERATOR_STATION.RANGES;
   var logSheetId = logSheet.getSheetId();
 
-  // Read active spec limits directly from cells B22:F23
   var limits = {
     c1Min: parseFloat(sheet.getRange(ranges.LIMIT_COMP_1_MIN).getValue()),
     c1Max: parseFloat(sheet.getRange(ranges.LIMIT_COMP_1_MAX).getValue()),
@@ -319,30 +312,29 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber)
     var rowLink = "#gid=" + logSheetId + "&range=A" + actualSheetRow;
     var serialHyperlinkFormula = '=HYPERLINK("' + rowLink + '", "' + trueSerial + '")';
 
-    var t1Status    = String(getLogVal(row, logCols.TEST_1_STATUS, 18) || "").trim();     // Col S (19)
-    var t2Status    = String(getLogVal(row, logCols.TEST_2_STATUS, 19) || "").trim();     // Col T (20)
-    var overallStat = String(getLogVal(row, logCols.OVERALL_STATUS, 20) || "").trim();    // Col U (21)
-    var diagnostics = String(getLogVal(row, logCols.DIAGNOSTICS, 21) || "").trim();        // Col V (22)
-    var evalAction  = String(getLogVal(row, logCols.EVALUATION_ACTION, 22) || "").trim(); // Col W (23)
-    var engComm     = String(getLogVal(row, logCols.ENG_COMMENTS, 23) || "").trim();       // Col X (24)
+    var t1Status    = String(getLogVal(row, logCols.TEST_1_STATUS, 18) || "").trim();
+    var t2Status    = String(getLogVal(row, logCols.TEST_2_STATUS, 19) || "").trim();
+    var overallStat = String(getLogVal(row, logCols.OVERALL_STATUS, 20) || "").trim();
+    var diagnostics = String(getLogVal(row, logCols.DIAGNOSTICS, 21) || "").trim();
+    var evalAction  = String(getLogVal(row, logCols.EVALUATION_ACTION, 22) || "").trim();
+    var engComm     = String(getLogVal(row, logCols.ENG_COMMENTS, 23) || "").trim();
 
     if (t1Status.toUpperCase().includes("FAIL")) test1FailCount++;
     if (t2Status.toUpperCase().includes("FAIL")) test2FailCount++;
 
-    // EXACT 12-COLUMN TABLE MAPPING (A26:L26 Headers)
     var mappedRow = [
-      serialHyperlinkFormula,                           // Col A (1): Serial Number
-      safeAbsNum(getLogVal(row, logCols.ROD_FORCE, 5)), // Col B (2): Rod Force
-      safeAbsNum(getLogVal(row, logCols.COMP_1, 7)),    // Col C (3): Low Speed Comp
-      safeAbsNum(getLogVal(row, logCols.REB_1, 8)),     // Col D (4): Low Speed Reb
-      safeAbsNum(getLogVal(row, logCols.COMP_2, 12)),   // Col E (5): Med Speed Comp
-      safeAbsNum(getLogVal(row, logCols.REB_2, 13)),    // Col F (6): Med Speed Reb
-      t1Status,                                         // Col G (7): Test 1: Global Gate
-      t2Status,                                         // Col H (8): Test 2: Batch Gate
-      overallStat,                                      // Col I (9): Overall Status
-      evalAction,                                       // Col J (10): Evaluation Action (Log Col W)
-      diagnostics,                                      // Col K (11): Diagnostics and Troubleshooting (Log Col V)
-      engComm                                           // Col L (12): Diagnostic Notes / Engineering Comments (Log Col X)
+      serialHyperlinkFormula,                           // Col A (1)
+      safeAbsNum(getLogVal(row, logCols.ROD_FORCE, 5)), // Col B (2)
+      safeAbsNum(getLogVal(row, logCols.COMP_1, 7)),    // Col C (3)
+      safeAbsNum(getLogVal(row, logCols.REB_1, 8)),     // Col D (4)
+      safeAbsNum(getLogVal(row, logCols.COMP_2, 12)),   // Col E (5)
+      safeAbsNum(getLogVal(row, logCols.REB_2, 13)),    // Col F (6)
+      t1Status,                                         // Col G (7)
+      t2Status,                                         // Col H (8)
+      overallStat,                                      // Col I (9)
+      evalAction,                                       // Col J (10)
+      diagnostics,                                      // Col K (11)
+      engComm                                           // Col L (12)
     ];
 
     rowsToDisplay.push(mappedRow);
@@ -369,9 +361,7 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber)
   var outputRange = sheet.getRange(startRow, ranges.RESULTS_START_COL, numRows, numCols);
 
   outputRange.setValues(rowsToDisplay);
-
-  // Set decimal format on numeric force columns B through F
-  sheet.getRange(startRow, 2, numRows, 5).setNumberFormat("0.0"); // Cols B..F
+  sheet.getRange(startRow, 2, numRows, 5).setNumberFormat("0.0");
 
   var bgColors = [];
   var fontColors = [];
@@ -383,45 +373,36 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber)
     var rowWeight = ["normal", "normal", "normal", "normal", "normal", "normal", "normal", "normal", "normal", "normal", "normal", "normal"];
     var rowData = rowsToDisplay[rIdx];
 
-    var t1StatusStr    = String(rowData[6] || "").toUpperCase(); // Col G
-    var t2StatusStr    = String(rowData[7] || "").toUpperCase(); // Col H
-    var overallStatStr = String(rowData[8] || "").toUpperCase(); // Col I
-    var evalActionStr  = String(rowData[9] || "").toLowerCase(); // Col J
-    var diagnosticsStr = String(rowData[10] || "");              // Col K
+    var t1StatusStr    = String(rowData[6] || "").toUpperCase();
+    var t2StatusStr    = String(rowData[7] || "").toUpperCase();
+    var overallStatStr = String(rowData[8] || "").toUpperCase();
+    var diagnosticsStr = String(rowData[10] || "");
 
-    var skipHighlight = evalActionStr.includes("approved") || evalActionStr.includes("management") || evalActionStr.includes("no issue found");
-
-    // RELIABLE FINGERPRINT PARSER ENGINE FOR OUTLIER CELL HIGHLIGHTS
     var applyFaultHighlight = function(colIndex) {
-      rowFont[colIndex] = "#FF0000";       // Bold Red Text
+      rowFont[colIndex] = "#FF0000";       
       rowWeight[colIndex] = "bold";        
-      rowBg[colIndex] = "#FADBD8";         // Soft Red Background Tint
+      rowBg[colIndex] = "#FADBD8";         
     };
 
-    if (!skipHighlight) {
-      // 1. Diagnostic Fingerprint Tag Checks (from Engine)
-      if (!diagnosticsStr.includes("✅")) {
-        if (diagnosticsStr.indexOf("[RF_FAIL]") !== -1)    applyFaultHighlight(1); // Col B (Rod Force)
-        if (diagnosticsStr.indexOf("[C1_FAIL]") !== -1)    applyFaultHighlight(2); // Col C (Low Comp)
-        if (diagnosticsStr.indexOf("[R1_FAIL]") !== -1)    applyFaultHighlight(3); // Col D (Low Reb)
-        if (diagnosticsStr.indexOf("[C2_FAIL]") !== -1)    applyFaultHighlight(4); // Col E (Med Comp)
-        if (diagnosticsStr.indexOf("[R2_FAIL]") !== -1)    applyFaultHighlight(5); // Col F (Med Reb)
-        if (diagnosticsStr.indexOf("[SLOPE_FAIL]") !== -1) { applyFaultHighlight(2); applyFaultHighlight(3); }
-      }
-
-      // 2. Direct Numeric Spec Limit Checks against active limits (B22:F23)
-      var c1Val = parseFloat(rowData[2]);
-      var r1Val = parseFloat(rowData[3]);
-      var c2Val = parseFloat(rowData[4]);
-      var r2Val = parseFloat(rowData[5]);
-
-      if (!isNaN(c1Val) && ((!isNaN(limits.c1Min) && c1Val < limits.c1Min) || (!isNaN(limits.c1Max) && c1Val > limits.c1Max))) applyFaultHighlight(2);
-      if (!isNaN(r1Val) && ((!isNaN(limits.r1Min) && r1Val < limits.r1Min) || (!isNaN(limits.r1Max) && r1Val > limits.r1Max))) applyFaultHighlight(3);
-      if (!isNaN(c2Val) && ((!isNaN(limits.c2Min) && c2Val < limits.c2Min) || (!isNaN(limits.c2Max) && c2Val > limits.c2Max))) applyFaultHighlight(4);
-      if (!isNaN(r2Val) && ((!isNaN(limits.r2Min) && r2Val < limits.r2Min) || (!isNaN(limits.r2Max) && r2Val > limits.r2Max))) applyFaultHighlight(5);
+    if (!diagnosticsStr.includes("✅")) {
+      if (diagnosticsStr.indexOf("[RF_FAIL]") !== -1)    applyFaultHighlight(1);
+      if (diagnosticsStr.indexOf("[C1_FAIL]") !== -1)    applyFaultHighlight(2);
+      if (diagnosticsStr.indexOf("[R1_FAIL]") !== -1)    applyFaultHighlight(3);
+      if (diagnosticsStr.indexOf("[C2_FAIL]") !== -1)    applyFaultHighlight(4);
+      if (diagnosticsStr.indexOf("[R2_FAIL]") !== -1)    applyFaultHighlight(5);
+      if (diagnosticsStr.indexOf("[SLOPE_FAIL]") !== -1) { applyFaultHighlight(2); applyFaultHighlight(3); }
     }
 
-    // Status Column Formats (Cols G, H, I)
+    var c1Val = parseFloat(rowData[2]);
+    var r1Val = parseFloat(rowData[3]);
+    var c2Val = parseFloat(rowData[4]);
+    var r2Val = parseFloat(rowData[5]);
+
+    if (!isNaN(c1Val) && ((!isNaN(limits.c1Min) && c1Val < limits.c1Min) || (!isNaN(limits.c1Max) && c1Val > limits.c1Max))) applyFaultHighlight(2);
+    if (!isNaN(r1Val) && ((!isNaN(limits.r1Min) && r1Val < limits.r1Min) || (!isNaN(limits.r1Max) && r1Val > limits.r1Max))) applyFaultHighlight(3);
+    if (!isNaN(c2Val) && ((!isNaN(limits.c2Min) && c2Val < limits.c2Min) || (!isNaN(limits.c2Max) && c2Val > limits.c2Max))) applyFaultHighlight(4);
+    if (!isNaN(r2Val) && ((!isNaN(limits.r2Min) && r2Val < limits.r2Min) || (!isNaN(limits.r2Max) && r2Val > limits.r2Max))) applyFaultHighlight(5);
+
     if (t1StatusStr.includes("FAIL")) {
       rowBg[6] = "#FADBD8"; rowFont[6] = "#C0392B"; rowWeight[6] = "bold";
     } else if (t1StatusStr.includes("PASS")) {
@@ -449,7 +430,14 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber)
 }
 
 /**
- * Trigger wrapper for spreadsheet edits.
+ * Standard Simple Trigger for Google Sheet edits.
+ */
+function onEdit(e) {
+  installableOnEdit(e);
+}
+
+/**
+ * Main Controller Engine for spreadsheet edits.
  */
 function installableOnEdit(e) {
   if (!e || !e.range) return;
@@ -457,17 +445,17 @@ function installableOnEdit(e) {
   var sheet = e.range.getSheet();
   var sheetName = sheet.getName();
 
-  // 1. Operator Station Barcode Scan Edit
+  // 1. Operator Station Edits
   if (sheetName === CONFIG.SHEET_NAMES.OPERATOR_STATION) {
-    manageOperatorStation(e);
+    try { manageOperatorStation(e); } catch(err) { Logger.log("Operator station edit error: " + err.toString()); }
     return;
   }
 
-  // 2. Master Dyno Log Edit (Column W / Col 23 or Column X / Col 24)
+  // 2. Master Dyno Log Edits (Column W / Col 23 or Column X / Col 24)
   if (sheetName === CONFIG.SHEET_NAMES.MASTER_DYNO_LOG) {
     var editedCol = e.range.getColumn();
-    var evalCol = CONFIG.COLUMNS.MASTER_DYNO_LOG.EVALUATION_ACTION || 23;
-    var commCol = CONFIG.COLUMNS.MASTER_DYNO_LOG.ENG_COMMENTS || 24;
+    var evalCol = (CONFIG.COLUMNS.MASTER_DYNO_LOG && CONFIG.COLUMNS.MASTER_DYNO_LOG.EVALUATION_ACTION) ? CONFIG.COLUMNS.MASTER_DYNO_LOG.EVALUATION_ACTION : 23;
+    var commCol = (CONFIG.COLUMNS.MASTER_DYNO_LOG && CONFIG.COLUMNS.MASTER_DYNO_LOG.ENG_COMMENTS) ? CONFIG.COLUMNS.MASTER_DYNO_LOG.ENG_COMMENTS : 24;
 
     if (editedCol === evalCol || editedCol === commCol) {
       retroactiveLogRecalculate();
@@ -475,13 +463,40 @@ function installableOnEdit(e) {
       var ss = e.source || SpreadsheetApp.getActiveSpreadsheet();
       var opSheet = ss.getSheetByName(CONFIG.SHEET_NAMES.OPERATOR_STATION);
       if (opSheet) {
-        manageOperatorStation({
-          source: ss,
-          range: opSheet.getRange(CONFIG.OPERATOR_STATION.RANGES.BARCODE_INPUT)
-        });
+        try {
+          manageOperatorStation({
+            source: ss,
+            range: opSheet.getRange(CONFIG.OPERATOR_STATION.RANGES.BARCODE_INPUT)
+          });
+        } catch(err) {
+          Logger.log("Notice: UI refresh skipped (Installable Trigger required for DriveApp lookup).");
+        }
       }
     }
   }
+}
+
+/**
+ * Automated Trigger Setup Helper. Run this function once from the Apps Script editor to enable full permissions.
+ */
+function setupTriggers() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  
+  // Remove existing triggers to avoid duplicates
+  var triggers = ScriptApp.getUserTriggers(ss);
+  for (var i = 0; i < triggers.length; i++) {
+    if (triggers[i].getHandlerFunction() === "installableOnEdit") {
+      ScriptApp.deleteTrigger(triggers[i]);
+    }
+  }
+
+  // Create active Installable On Edit trigger with full Drive permissions
+  ScriptApp.newTrigger("installableOnEdit")
+    .forSpreadsheet(ss)
+    .onEdit()
+    .create();
+
+  Logger.log("Successfully installed OnEdit trigger for installableOnEdit.");
 }
 
 /**
