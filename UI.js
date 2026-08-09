@@ -447,3 +447,17 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber)
 
   outputRange.setBackgrounds(bgColors).setFontColors(fontColors).setFontWeights(fontWeights);
 }
+
+/**
+ * Trigger wrapper for spreadsheet edits.
+ */
+function installableOnEdit(e) {
+  manageOperatorStation(e);
+}
+
+/**
+ * Trigger wrapper for scheduled background syncs.
+ */
+function syncDynoAndRefreshWO() {
+  clickMasterSyncButton();
+}

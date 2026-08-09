@@ -90,6 +90,7 @@ function buildMatrixHeaderMap(headerRow) {
     r1Min: refCols.REB_1_MIN - 1,
     r1Max: refCols.REB_1_MAX - 1,
     slope1Min: refCols.SLOPE_1_MIN - 1,
+    loopArea1Min: refCols.LOOP_AREA_1_MIN - 1,
     c2Mean: refCols.COMP_2_MEAN - 1,
     c2SD: refCols.COMP_2_SD - 1,
     c2Min: refCols.COMP_2_MIN - 1,
@@ -98,6 +99,7 @@ function buildMatrixHeaderMap(headerRow) {
     r2SD: refCols.REB_2_SD - 1,
     r2Min: refCols.REB_2_MIN - 1,
     r2Max: refCols.REB_2_MAX - 1,
+    slope2Min: refCols.SLOPE_2_MIN - 1,
     c3Mean: refCols.COMP_3_MEAN - 1,
     c3SD: refCols.COMP_3_SD - 1,
     c3Min: refCols.COMP_3_MIN - 1,
@@ -431,6 +433,7 @@ function retroactiveLogRecalculate() {
       
       var c1Vals = [], r1Vals = [], c2Vals = [], r2Vals = [];
       var s1Vals = [], s2Vals = [], s3Vals = [];
+      var sl1Vals = [], la1Vals = [], sl2Vals = [];
       
       for (var s = 0; s < pool.length; s++) {
         var d = pool[s];
@@ -439,6 +442,10 @@ function retroactiveLogRecalculate() {
         c2Vals.push(parseFloat(d[hMap.comp2]) || 0);
         r2Vals.push(Math.abs(parseFloat(d[hMap.reb2])) || 0);
         
+        if (!isNaN(parseFloat(d[hMap.slope1]))) sl1Vals.push(parseFloat(d[hMap.slope1]));
+        if (!isNaN(parseFloat(d[hMap.loopArea1]))) la1Vals.push(parseFloat(d[hMap.loopArea1]));
+        if (!isNaN(parseFloat(d[hMap.slope2]))) sl2Vals.push(parseFloat(d[hMap.slope2]));
+
         var sp1 = snapToNominalSpeed(d[hMap.speed1]);
         var sp2 = snapToNominalSpeed(d[hMap.speed2]);
         var sp3 = snapToNominalSpeed(d[hMap.speed3]);
@@ -492,16 +499,21 @@ function retroactiveLogRecalculate() {
         if (mMap.r2SD !== undefined) refSheet.getRange(refRowIdx, mMap.r2SD + 1).setValue(parseFloat(r2S.toFixed(2)));
         
         if (countN > 2) {
-          if (mMap.c1Min !== undefined) refSheet.getRange(refRowIdx, mMap.c1Min + 1).setValue(parseFloat((c1M - 3*c1S).toFixed(1)));
+          if (mMap.c1Min !== undefined) refSheet.getRange(refRowIdx, mMap.c1Min + 1).setValue(Math.max(0, parseFloat((c1M - 3*c1S).toFixed(1))));
           if (mMap.c1Max !== undefined) refSheet.getRange(refRowIdx, mMap.c1Max + 1).setValue(parseFloat((c1M + 3*c1S).toFixed(1)));
-          if (mMap.r1Min !== undefined) refSheet.getRange(refRowIdx, mMap.r1Min + 1).setValue(parseFloat((r1M - 3*r1S).toFixed(1)));
+          if (mMap.r1Min !== undefined) refSheet.getRange(refRowIdx, mMap.r1Min + 1).setValue(Math.max(0, parseFloat((r1M - 3*r1S).toFixed(1))));
           if (mMap.r1Max !== undefined) refSheet.getRange(refRowIdx, mMap.r1Max + 1).setValue(parseFloat((r1M + 3*r1S).toFixed(1)));
-          if (mMap.c2Min !== undefined) refSheet.getRange(refRowIdx, mMap.c2Min + 1).setValue(parseFloat((c2M - 3*c2S).toFixed(1)));
+          if (mMap.c2Min !== undefined) refSheet.getRange(refRowIdx, mMap.c2Min + 1).setValue(Math.max(0, parseFloat((c2M - 3*c2S).toFixed(1))));
           if (mMap.c2Max !== undefined) refSheet.getRange(refRowIdx, mMap.c2Max + 1).setValue(parseFloat((c2M + 3*c2S).toFixed(1)));
-          if (mMap.r2Min !== undefined) refSheet.getRange(refRowIdx, mMap.r2Min + 1).setValue(parseFloat((r2M - 3*r2S).toFixed(1)));
+          if (mMap.r2Min !== undefined) refSheet.getRange(refRowIdx, mMap.r2Min + 1).setValue(Math.max(0, parseFloat((r2M - 3*r2S).toFixed(1))));
           if (mMap.r2Max !== undefined) refSheet.getRange(refRowIdx, mMap.r2Max + 1).setValue(parseFloat((r2M + 3*r2S).toFixed(1)));
         }
       }
+
+      // Populate Minimum Slopes & Loop Area Metrics (Columns M, N, W)
+      if (sl1Vals.length > 0 && mMap.slope1Min !== undefined) refSheet.getRange(refRowIdx, mMap.slope1Min + 1).setValue(parseFloat(Math.min.apply(null, sl1Vals).toFixed(1)));
+      if (la1Vals.length > 0 && mMap.loopArea1Min !== undefined) refSheet.getRange(refRowIdx, mMap.loopArea1Min + 1).setValue(parseFloat(Math.min.apply(null, la1Vals).toFixed(1)));
+      if (sl2Vals.length > 0 && mMap.slope2Min !== undefined) refSheet.getRange(refRowIdx, mMap.slope2Min + 1).setValue(parseFloat(Math.min.apply(null, sl2Vals).toFixed(1)));
 
       // Populate Engineering SPC Metrics (Columns AG to AN)
       var origComp = parseFloat(row[mMap.origCompBase]);
@@ -533,9 +545,29 @@ function retroactiveLogRecalculate() {
       if (mMap.compDriftPct !== undefined) refSheet.getRange(refRowIdx, mMap.compDriftPct + 1).setValue(parseFloat(compDrift.toFixed(2)));
       if (mMap.rebDriftPct !== undefined) refSheet.getRange(refRowIdx, mMap.rebDriftPct + 1).setValue(parseFloat(rebDrift.toFixed(2)));
       
-      var procHealth = isSeeded ? "🟢 Stage 0: SEEDED BLUEPRINT ACTIVE (3σ)" : (countN >= 100 ? "🟢 Stage 4: MATURE SPC LOCKED (3σ)" : "Establishing Baseline");
+      // Update Column AO: Health Stamp
+      var maxDrift = Math.max(Math.abs(compDrift), Math.abs(rebDrift));
+      var procHealth = "";
+      if (maxDrift > 10) {
+        procHealth = "🔴 WARNING: UNACCEPTABLE DRIFT (" + maxDrift.toFixed(1) + "%)";
+      } else if (isSeeded) {
+        procHealth = "🟢 Stage 0: SEEDED BLUEPRINT ACTIVE (3σ)";
+      } else if (countN >= 100) {
+        procHealth = "🟢 Stage 4: MATURE SPC LOCKED (3σ)";
+      } else {
+        procHealth = "🟡 Stage 1: BUILDING BASELINE (" + countN + " samples)";
+      }
       if (mMap.healthStamp !== undefined) refSheet.getRange(refRowIdx, mMap.healthStamp + 1).setValue(procHealth);
-      if (mMap.controlMode !== undefined) refSheet.getRange(refRowIdx, mMap.controlMode + 1).setValue(isSeeded ? "MANUAL GRACE LIMITS LOADED" : "AUTOMATED STATISTICAL SPC LAYER ACTIVE");
+
+      // Update Column AP: Control Mode
+      var controlModeText = "MANUAL GRACE LIMITS LOADED";
+      if (countN >= 10 && !isSeeded) {
+        controlModeText = "AUTOMATED STATISTICAL SPC LAYER ACTIVE";
+      } else if (countN >= 10 && isSeeded) {
+        controlModeText = "HYBRID: SEEDED BLUEPRINT WITH ACTIVE SPC";
+      }
+      if (mMap.controlMode !== undefined) refSheet.getRange(refRowIdx, mMap.controlMode + 1).setValue(controlModeText);
+
       if (mMap.sampleCount !== undefined) refSheet.getRange(refRowIdx, mMap.sampleCount + 1).setValue(countN);
     }
   }
