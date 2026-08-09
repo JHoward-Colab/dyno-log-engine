@@ -391,7 +391,7 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber)
 
     var skipHighlight = evalActionStr.includes("approved") || evalActionStr.includes("management") || evalActionStr.includes("no issue found");
 
-    // 🚀 RELIABLE FINGERPRINT PARSER ENGINE FOR OUTLIER CELL HIGHLIGHTS (from production monolith)
+    // 🚀 RELIABLE FINGERPRINT PARSER ENGINE FOR OUTLIER CELL HIGHLIGHTS
     var applyFaultHighlight = function(colIndex) {
       rowFont[colIndex] = "#FF0000";       // Bold Red Text
       rowWeight[colIndex] = "bold";        
