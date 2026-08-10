@@ -614,7 +614,6 @@ function retroactiveLogRecalculate() {
     var test1Result = "INITIALIZING"; var test2Result = "INITIALIZING"; var finalStatus = "PASS";
     var failTags = [];
     
-    // Primary: Column W / Z Evaluation Action
     var evalAction = String(logData[r][hMap.evaluationAction] || "").trim();
     
     if (pName && logData[r][0] !== "") {
@@ -684,26 +683,50 @@ function retroactiveLogRecalculate() {
         if (uniqueFailTags.indexOf(failTags[f]) === -1) uniqueFailTags.push(failTags[f]);
       }
       
-      var evalLower = evalAction.toLowerCase();
+      var evalLower = evalAction.toLowerCase().trim();
       var globalPass = (test1Result === "INITIALIZING" || !test1Result.includes("FAIL")) && (test2Result === "INITIALIZING" || !test2Result.includes("FAIL"));
       var diagnosticNotes = globalPass ? "✅ SHOCK IS WITHIN TOLERANCE." : "❌ ERROR: " + uniqueFailTags.join(" ") + " | " + defectAnalysis;
 
-      // Isolated Evaluation Action Logic
-      if (evalLower.indexOf("management") !== -1 || evalLower.indexOf("discretionary") !== -1) {
-        test1Result = "PASS (OVERRIDE)"; 
-        test2Result = "PASS (OVERRIDE)"; 
-        finalStatus = "PASS (OVERRIDE)";
-        diagnosticNotes = "👔 DISCRETIONARY CLEAR: Released via Management Sign-off.";
-      } else if (evalLower.indexOf("teardown") !== -1 || evalLower.indexOf("no issue") !== -1 || evalLower.indexOf("retested") !== -1 || evalLower.indexOf("re-tested") !== -1 || evalLower.indexOf("validated") !== -1) {
-        test1Result = "PASS"; 
-        test2Result = "PASS"; 
-        finalStatus = "PASS";
-        diagnosticNotes = "🛠️ TEARDOWN VALIDATED: Assembly clear.";
-      } else if (evalLower.indexOf("override") !== -1 || evalLower.indexOf("approved") !== -1) {
-        test1Result = "PASS (OVERRIDE)"; 
-        test2Result = "PASS (OVERRIDE)"; 
+      // Evaluation Action Multi-Path Logic
+      if (evalLower.indexOf("override test 1") !== -1) {
+        test1Result = "PASS (OVERRIDE)";
+        var t2Passing = (test2Result.indexOf("PASS") !== -1);
+        if (t2Passing) {
+          finalStatus = "PASS (OVERRIDE)";
+          diagnosticNotes = "⚠️ MANUAL OVERRIDE: Authorized via Engineering Action.";
+        } else {
+          finalStatus = "FAIL";
+          diagnosticNotes = "⚠️ TEST 1 OVERRIDDEN | Test 2 Failure: " + uniqueFailTags.join(" ");
+        }
+      } else if (evalLower.indexOf("override test 2") !== -1) {
+        test2Result = "PASS (OVERRIDE)";
+        var t1Passing = (test1Result.indexOf("PASS") !== -1);
+        if (t1Passing) {
+          finalStatus = "PASS (OVERRIDE)";
+          diagnosticNotes = "⚠️ MANUAL OVERRIDE: Authorized via Engineering Action.";
+        } else {
+          finalStatus = "FAIL";
+          diagnosticNotes = "⚠️ TEST 2 OVERRIDDEN | Test 1 Failure: " + uniqueFailTags.join(" ");
+        }
+      } else if (evalLower.indexOf("override all") !== -1 || evalLower.indexOf("override both") !== -1) {
+        test1Result = "PASS (OVERRIDE)";
+        test2Result = "PASS (OVERRIDE)";
         finalStatus = "PASS (OVERRIDE)";
         diagnosticNotes = "⚠️ MANUAL OVERRIDE: Authorized via Engineering Action.";
+      } else if (evalLower.indexOf("retest required") !== -1 || evalLower === "retest") {
+        finalStatus = "HOLD (RETEST REQUIRED)";
+        diagnosticNotes = "⏳ RETEST REQUIRED: Operator to re-run shock on dyno.";
+      } else if (evalLower.indexOf("teardown required") !== -1 || evalLower === "teardown") {
+        finalStatus = "HOLD (TEARDOWN REQUIRED)";
+        diagnosticNotes = "🔧 TEARDOWN REQUIRED: Inspect internal assembly & valving.";
+      } else if (evalLower.indexOf("no issue found") !== -1 || evalLower.indexOf("no issue") !== -1) {
+        test1Result = "PASS";
+        test2Result = "PASS";
+        finalStatus = "PASS";
+        diagnosticNotes = "🛠️ TEARDOWN VALIDATED: Assembly clear.";
+      } else if (evalLower.indexOf("issue found") !== -1) {
+        finalStatus = "FAIL";
+        diagnosticNotes = "❌ ISSUE CONFIRMED: See Engineering Comments.";
       } else if (!globalPass) {
         finalStatus = "FAIL";
       }
