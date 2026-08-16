@@ -360,7 +360,7 @@ function retroactiveLogRecalculate() {
   var sd = function(arr, m) { var clean = arr.filter(function(x){return !isNaN(x);}); return clean.length <= 1 ? 0 : Math.sqrt(clean.map(function(x){return Math.pow(x-m,2);}).reduce(function(a,b){return a+b;},0)/(clean.length - 1)); };
   var cleanStr = function(s) { return String(s || "").trim().toLowerCase().replace(/[-_\s]/g, ""); };
 
-  // STEP 0: Auto-Sync Part_Reference_Matrix rows from Program_Registry AND Master_Dyno_Log
+  // STEP 0: Build Mapping Dictionary & Seed Matrix SOLELY from Program_Registry DYNAMIC_KEY
   var modelToDynamicKey = {};
   var existingMatrixKeys = {};
   for (var m = 1; m < refData.length; m++) {
@@ -394,19 +394,6 @@ function retroactiveLogRecalculate() {
     }
   }
 
-  // Also auto-append any program name present in Master_Dyno_Log missing from Part_Reference_Matrix
-  for (var r = 1; r < logData.length; r++) {
-    var pNameRaw = String(logData[r][hMap.programName] || "").trim();
-    var cleanP = cleanStr(pNameRaw);
-    if (cleanP && !existingMatrixKeys[cleanP]) {
-      var newRefRow = [];
-      for (var colIdx = 0; colIdx < 42; colIdx++) newRefRow.push("");
-      newRefRow[mMap.dynamicKey] = pNameRaw;
-      rowsToAppend.push(newRefRow);
-      existingMatrixKeys[cleanP] = refData.length + rowsToAppend.length;
-    }
-  }
-
   if (rowsToAppend.length > 0) {
     refSheet.getRange(refSheet.getLastRow() + 1, 1, rowsToAppend.length, 42).setValues(rowsToAppend);
     SpreadsheetApp.flush();
@@ -414,7 +401,7 @@ function retroactiveLogRecalculate() {
   }
 
   // STEP 1: Direct Matrix-Driven Baseline Recalculation
-  // For every row in Part_Reference_Matrix, gather matching rows from Master_Dyno_Log
+  // Loop ONLY over Part_Reference_Matrix rows and compile all matching dyno runs under that DYNAMIC_KEY
   for (var mx = 1; mx < refData.length; mx++) {
     var matrixKey = String(refData[mx][mMap.dynamicKey] || "").trim();
     if (!matrixKey) continue;
@@ -428,14 +415,12 @@ function retroactiveLogRecalculate() {
       var cLogProg = cleanStr(logProg);
       var cLogBase = cleanStr(logBaseModel);
 
-      // Robust fuzzy match between Matrix Key and Dyno Log row
-      var isMatch = (cMatrixKey === cLogProg || cMatrixKey === cLogBase ||
-                     (cMatrixKey.length >= 5 && cLogProg.indexOf(cMatrixKey) !== -1) ||
-                     (cLogProg.length >= 5 && cMatrixKey.indexOf(cLogProg) !== -1) ||
-                     (cMatrixKey.length >= 5 && cLogBase.indexOf(cMatrixKey) !== -1) ||
-                     (cLogBase.length >= 5 && cMatrixKey.indexOf(cLogBase) !== -1));
+      // Resolve the master DYNAMIC_KEY for this dyno row
+      var resolvedKey = modelToDynamicKey[cLogBase] || modelToDynamicKey[cLogProg] || logProg;
+      var cResolvedKey = cleanStr(resolvedKey);
 
-      if (isMatch) {
+      // Compile under this matrix row ONLY if resolvedKey matches matrixKey
+      if (cResolvedKey === cMatrixKey || cLogProg === cMatrixKey || cLogBase === cMatrixKey) {
         logData[r]._rowIdx = r + 1;
         pool.push(logData[r]);
       }
