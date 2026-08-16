@@ -361,26 +361,55 @@ function retroactiveLogRecalculate() {
 
   var batchGroups = {};
   var historicalGroups = {};
-  
-  // Build BASE_MODEL & PROGRAM_NAME -> DYNAMIC_KEY map from Program_Registry
+
+  // STEP 0: Auto-Sync Part_Reference_Matrix rows from Program_Registry
   var modelToDynamicKey = {};
   if (regSheet) {
     var regValues = regSheet.getDataRange().getValues();
     var regCols = CONFIG.COLUMNS.PROGRAM_REGISTRY;
+    
+    var existingMatrixKeys = {};
+    for (var m = 1; m < refData.length; m++) {
+      var mk = String(refData[m][mMap.dynamicKey] || "").toLowerCase().replace(/[-_\s]/g, "");
+      if (mk) existingMatrixKeys[mk] = true;
+    }
+    
+    var rowsToAppend = [];
     for (var k = 1; k < regValues.length; k++) {
       var bm = String(regValues[k][regCols.BASE_MODEL - 1] || "").trim().toLowerCase().replace(/[-_\s]/g, "");
-      var pn = String(regValues[k][regCols.PROGRAM_NAME - 1] || "").trim().toLowerCase().replace(/[-_\s]/g, "");
+      var pn = String(regValues[k][regCols.PROGRAM_NAME - 1] || "").trim();
+      var pnClean = pn.toLowerCase().replace(/[-_\s]/g, "");
       var dk = String(regValues[k][regCols.DYNAMIC_KEY - 1] || "").trim();
       
-      var targetKey = dk || regValues[k][regCols.PROGRAM_NAME - 1] || regValues[k][regCols.BASE_MODEL - 1];
+      var targetKey = dk || pn || regValues[k][regCols.BASE_MODEL - 1];
+      var cleanTargetKey = targetKey.toLowerCase().replace(/[-_\s]/g, "");
+
       if (bm) modelToDynamicKey[bm] = targetKey;
-      if (pn) modelToDynamicKey[pn] = targetKey;
+      if (pnClean) modelToDynamicKey[pnClean] = targetKey;
+
+      if (cleanTargetKey && !existingMatrixKeys[cleanTargetKey]) {
+        var newRefRow = [];
+        for (var colIdx = 0; colIdx < 42; colIdx++) newRefRow.push("");
+        newRefRow[mMap.dynamicKey] = targetKey;
+        rowsToAppend.push(newRefRow);
+        existingMatrixKeys[cleanTargetKey] = true;
+      }
+    }
+
+    if (rowsToAppend.length > 0) {
+      refSheet.getRange(refSheet.getLastRow() + 1, 1, rowsToAppend.length, 42).setValues(rowsToAppend);
+      SpreadsheetApp.flush();
+      refData = refSheet.getDataRange().getValues(); // Refresh cache
     }
   }
 
-  // STEP 1: Compute Batch Math Limits across cohorts
+  // Pass 1: Filter & Deduplicate for SPC Baseline Pool
   for (var r = 1; r < logData.length; r++) {
+    var prog = String(logData[r][hMap.programName] || "").trim();
     var serial = String(logData[r][hMap.trueSerial] || "").trim();
+    var baseModel = String(logData[r][hMap.baseModel] || "").trim().toLowerCase().replace(/[-_\s]/g, "");
+    var cleanProgName = prog.toLowerCase().replace(/[-_\s]/g, "");
+    var overallStatus = String(logData[r][hMap.overallStatus] || "").toUpperCase().trim();
     if (logData[r][0] === "") continue;
     
     if (serial !== "") {
@@ -395,181 +424,9 @@ function retroactiveLogRecalculate() {
       batchGroups[batchId].rf.push(parseFloat(logData[r][hMap.rodForce]) || 0);
       batchGroups[batchId].rowReferences.push(r);
     }
-  }
-
-  var batchStats = {};
-  for (var bId in batchGroups) {
-    var b = batchGroups[bId];
-    var mC1 = mean(b.c1), sC1 = sd(b.c1, mC1);
-    var mR1 = mean(b.r1), sR1 = sd(b.r1, mR1);
-    var mC2 = mean(b.c2), sC2 = sd(b.c2, mC2);
-    var mR2 = mean(b.r2), sR2 = sd(b.r2, mR2);
-    var mRF = mean(b.rf), sRF = sd(b.rf, mRF);
     
-    batchStats[bId] = {
-      c1Min: mC1 - 2*sC1, c1Max: mC1 + 2*sC1,
-      r1Min: mR1 - 2*sR1, r1Max: mR1 + 2*sR1,
-      c2Min: mC2 - 2*sC2, c2Max: mC2 + 2*sC2,
-      r2Min: mR2 - 2*sR2, r2Max: mR2 + 2*sR2,
-      rfMin: mRF - 2*sRF, count: b.c1.length
-    };
-  }
-
-  // STEP 2: Evaluate Pass/Fail Status & Diagnostics for Master_Dyno_Log (First Pass)
-  var qualityOutputSubMatrix = [];
-  for (var r = 1; r < logData.length; r++) {
-    var pName = String(logData[r][hMap.programName] || "").trim();
-    var serial = String(logData[r][hMap.trueSerial] || "").trim();
-    var baseModel = String(logData[r][hMap.baseModel] || "").trim().toLowerCase().replace(/[-_\s]/g, "");
-    var cleanPName = pName.toLowerCase().replace(/[-_\s]/g, "");
-    var batchId = serial.split("-")[0].trim();
-    
-    var test1Result = "INITIALIZING"; var test2Result = "INITIALIZING"; var finalStatus = "PASS";
-    var failTags = [];
-    
-    var evalAction = String(logData[r][hMap.evaluationAction] || "").trim();
-    
-    if (pName && logData[r][0] !== "") {
-      var resolvedDynamicKey = modelToDynamicKey[baseModel] || modelToDynamicKey[cleanPName] || pName;
-      var cleanResolvedKey = resolvedDynamicKey.toLowerCase().replace(/[-_\s]/g, "");
-      
-      var refRow = null;
-      for (var mx = 1; mx < refData.length; mx++) {
-        var mKey = String(refData[mx][mMap.dynamicKey] || "").trim().toLowerCase().replace(/[-_\s]/g, "");
-        if (mKey && (mKey === cleanResolvedKey || cleanResolvedKey.indexOf(mKey) !== -1 || mKey.indexOf(cleanResolvedKey) !== -1)) {
-          refRow = refData[mx]; break;
-        }
-      }
-      
-      var lowC = parseFloat(logData[r][hMap.comp1]) || 0; var lowR = Math.abs(parseFloat(logData[r][hMap.reb1])) || 0;
-      var midC = parseFloat(logData[r][hMap.comp2]) || 0; var midR = Math.abs(parseFloat(logData[r][hMap.reb2])) || 0;
-      var sl1  = parseFloat(logData[r][hMap.slope1]) || 0; var individualRF = parseFloat(logData[r][hMap.rodForce]) || 0;
-      
-      // Global Limit Check Tagging (Test 1)
-      if (refRow) {
-        var t1Pass = true;
-        var valC1Min = parseFloat(refRow[mMap.c1Min]); var valC1Max = parseFloat(refRow[mMap.c1Max]);
-        var valR1Min = parseFloat(refRow[mMap.r1Min]); var valR1Max = parseFloat(refRow[mMap.r1Max]);
-        var valC2Min = parseFloat(refRow[mMap.c2Min]); var valC2Max = parseFloat(refRow[mMap.c2Max]);
-        var valR2Min = parseFloat(refRow[mMap.r2Min]); var valR2Max = parseFloat(refRow[mMap.r2Max]);
-        var slope1Min = parseFloat(refRow[mMap.slope1Min]) || 0;
-        
-        if (!isNaN(valC1Min)) {
-          if (lowC < valC1Min || lowC > valC1Max) { t1Pass = false; failTags.push("[C1_FAIL]"); }
-          if (lowR < valR1Min || lowR > valR1Max) { t1Pass = false; failTags.push("[R1_FAIL]"); }
-          if (midC < valC2Min || midC > valC2Max) { t1Pass = false; failTags.push("[C2_FAIL]"); }
-          if (midR < valR2Min || midR > valR2Max) { t1Pass = false; failTags.push("[R2_FAIL]"); }
-          if (sl1 < slope1Min) { t1Pass = false; failTags.push("[SLOPE_FAIL]"); }
-        }
-        test1Result = t1Pass ? "PASS" : "FAIL (BLUEPRINT)";
-      }
-      
-      // Cohort Outlier Check Tagging (Test 2)
-      var cStat = batchStats[batchId];
-      var defectAnalysis = "";
-      if (cStat && cStat.count > 2) {
-        var t2Pass = true;
-        var lowGasPressure = (individualRF < cStat.rfMin);
-        var lowC1 = (lowC < cStat.c1Min || lowC > cStat.c1Max);
-        var lowR1 = (lowR < cStat.r1Min || lowR > cStat.r1Max);
-        var lowC2 = (midC < cStat.c2Min || midC > cStat.c2Max);
-        var lowR2 = (midR < cStat.r2Min || midR > cStat.r2Max);
-        
-        if (lowGasPressure) { t2Pass = false; failTags.push("[RF_FAIL]"); }
-        if (lowC1) { t2Pass = false; failTags.push("[C1_FAIL]"); }
-        if (lowR1) { t2Pass = false; failTags.push("[R1_FAIL]"); }
-        if (lowC2) { t2Pass = false; failTags.push("[C2_FAIL]"); }
-        if (lowR2) { t2Pass = false; failTags.push("[R2_FAIL]"); }
-        
-        if (!t2Pass) {
-          if (lowGasPressure) defectAnalysis = "Gas Pressure Deficient.";
-          else if (lowC1 && lowR1) defectAnalysis = "Symmetric drop. Potential bypass.";
-          else if (lowC1) defectAnalysis = "Compression outlier variation.";
-          else if (lowR1) defectAnalysis = "Rebound outlier variation.";
-          else defectAnalysis = "Outlier variance detected.";
-        }
-        test2Result = t2Pass ? "PASS" : "FAIL (OUTLIER)";
-      }
-      
-      var uniqueFailTags = [];
-      for (var f = 0; f < failTags.length; f++) {
-        if (uniqueFailTags.indexOf(failTags[f]) === -1) uniqueFailTags.push(failTags[f]);
-      }
-      
-      var evalLower = evalAction.toLowerCase().trim();
-      var globalPass = (test1Result === "INITIALIZING" || !test1Result.includes("FAIL")) && (test2Result === "INITIALIZING" || !test2Result.includes("FAIL"));
-      var diagnosticNotes = globalPass ? "✅ SHOCK IS WITHIN TOLERANCE." : "❌ ERROR: " + uniqueFailTags.join(" ") + " | " + defectAnalysis;
-
-      if (evalLower.indexOf("override test 1") !== -1) {
-        test1Result = "PASS (OVERRIDE)";
-        var t2Passing = (test2Result.indexOf("PASS") !== -1);
-        if (t2Passing) {
-          finalStatus = "PASS (OVERRIDE)";
-          diagnosticNotes = "⚠️ MANUAL OVERRIDE: Authorized via Engineering Action.";
-        } else {
-          finalStatus = "FAIL";
-          diagnosticNotes = "⚠️ TEST 1 OVERRIDDEN | Test 2 Failure: " + uniqueFailTags.join(" ");
-        }
-      } else if (evalLower.indexOf("override test 2") !== -1) {
-        test2Result = "PASS (OVERRIDE)";
-        var t1Passing = (test1Result.indexOf("PASS") !== -1);
-        if (t1Passing) {
-          finalStatus = "PASS (OVERRIDE)";
-          diagnosticNotes = "⚠️ MANUAL OVERRIDE: Authorized via Engineering Action.";
-        } else {
-          finalStatus = "FAIL";
-          diagnosticNotes = "⚠️ TEST 2 OVERRIDDEN | Test 1 Failure: " + uniqueFailTags.join(" ");
-        }
-      } else if (evalLower.indexOf("override all") !== -1 || evalLower.indexOf("override both") !== -1) {
-        test1Result = "PASS (OVERRIDE)";
-        test2Result = "PASS (OVERRIDE)";
-        finalStatus = "PASS (OVERRIDE)";
-        diagnosticNotes = "⚠️ MANUAL OVERRIDE: Authorized via Engineering Action.";
-      } else if (evalLower.indexOf("retest required") !== -1 || evalLower === "retest") {
-        finalStatus = "HOLD (RETEST REQUIRED)";
-        diagnosticNotes = "⏳ RETEST REQUIRED: Operator to re-run shock on dyno.";
-      } else if (evalLower.indexOf("teardown required") !== -1 || evalLower === "teardown") {
-        finalStatus = "HOLD (TEARDOWN REQUIRED)";
-        diagnosticNotes = "🔧 TEARDOWN REQUIRED: Inspect internal assembly & valving.";
-      } else if (evalLower.indexOf("no issue found") !== -1 || evalLower.indexOf("no issue") !== -1) {
-        test1Result = "PASS";
-        test2Result = "PASS";
-        finalStatus = "PASS";
-        diagnosticNotes = "🛠️ TEARDOWN VALIDATED: Assembly clear.";
-      } else if (evalLower.indexOf("issue found") !== -1) {
-        finalStatus = "FAIL";
-        diagnosticNotes = "❌ ISSUE CONFIRMED: See Engineering Comments.";
-      } else if (!globalPass) {
-        finalStatus = "FAIL";
-      }
-    }
-
-    // Store in-memory for log Sheet write and baseline calculations
-    logData[r][hMap.test1Status] = test1Result;
-    logData[r][hMap.test2Status] = test2Result;
-    logData[r][hMap.overallStatus] = finalStatus;
-    logData[r][hMap.diagnostics] = diagnosticNotes;
-
-    qualityOutputSubMatrix.push([test1Result, test2Result, finalStatus, diagnosticNotes]);
-  }
-
-  // Write calculated status directly to logSheet
-  if (qualityOutputSubMatrix.length > 0) {
-    var startColIdx = (CONFIG.COLUMNS.MASTER_DYNO_LOG.TEST_1_STATUS) || 19;
-    logSheet.getRange(2, startColIdx, qualityOutputSubMatrix.length, 4).setValues(qualityOutputSubMatrix);
-  }
-
-  // STEP 3: Filter & Deduplicate for SPC Baseline Pool (Using Fresh Pass/Fail Data)
-  for (var r = 1; r < logData.length; r++) {
-    var prog = String(logData[r][hMap.programName] || "").trim();
-    var serial = String(logData[r][hMap.trueSerial] || "").trim();
-    var baseModel = String(logData[r][hMap.baseModel] || "").trim().toLowerCase().replace(/[-_\s]/g, "");
-    var cleanProgName = prog.toLowerCase().replace(/[-_\s]/g, "");
-    var overallStatus = String(logData[r][hMap.overallStatus] || "").toUpperCase().trim();
-    if (logData[r][0] === "") continue;
-
     var resolvedGroupKey = modelToDynamicKey[baseModel] || modelToDynamicKey[cleanProgName] || prog;
-    var isPassingRun = overallStatus.indexOf("PASS") !== -1 || overallStatus === "" || overallStatus === "INITIALIZING";
+    var isPassingRun = overallStatus.indexOf("PASS") !== -1 || overallStatus === "" || overallStatus === "INITIALIZING" || overallStatus === "NOT RUN" || overallStatus === "NOT TESTED YET";
 
     if (resolvedGroupKey !== "" && isPassingRun) {
       if (!historicalGroups[resolvedGroupKey]) {
@@ -581,15 +438,14 @@ function retroactiveLogRecalculate() {
       historicalGroups[resolvedGroupKey][serialKey] = logData[r];
     }
   }
-
-  // STEP 4: Calculate Baselines and Write/Auto-Append to Part_Reference_Matrix
+  
+  // Pass 2: Calculate Baselines across speeds
   for (var pName in historicalGroups) {
     var serialMap = historicalGroups[pName];
     var pool = Object.keys(serialMap).map(function(k) { return serialMap[k]; });
     var countN = pool.length;
     var cleanPName = pName.replace(/[-_\s]/g, "").toLowerCase();
     
-    // Refresh refData
     refData = refSheet.getDataRange().getValues();
     
     var refRowIdx = -1;
@@ -606,15 +462,14 @@ function retroactiveLogRecalculate() {
       }
     }
     
-    // Auto-append missing program key if refRowIdx is -1
     if (refRowIdx === -1) {
       refRowIdx = refSheet.getLastRow() + 1;
       refSheet.getRange(refRowIdx, mMap.dynamicKey + 1).setValue(pName);
     }
     
-    var row = refSheet.getRange(refRowIdx, 1, 1, refSheet.getLastColumn()).getValues()[0];
-    var c1MinRaw = row[mMap.c1Min];
-    var isSeeded = c1MinRaw !== "" && c1MinRaw !== null && !isNaN(parseFloat(c1MinRaw));
+    var row = (refRowIdx <= refData.length) ? refData[refRowIdx - 1] : [pName];
+    var c1MinRaw = row ? row[mMap.c1Min] : "";
+    var isSeeded = c1MinRaw !== "" && c1MinRaw !== null && c1MinRaw !== undefined && !isNaN(parseFloat(c1MinRaw));
     
     var c1Vals = [], r1Vals = [], c2Vals = [], r2Vals = [];
     var s1Vals = [], s2Vals = [], s3Vals = [];
@@ -752,5 +607,163 @@ function retroactiveLogRecalculate() {
     if (mMap.sampleCount !== undefined) refSheet.getRange(refRowIdx, mMap.sampleCount + 1).setValue(countN);
   }
 
+  // Pass 3: Rolling Batch Math Limits
+  var batchStats = {};
+  for (var bId in batchGroups) {
+    var b = batchGroups[bId];
+    var mC1 = mean(b.c1), sC1 = sd(b.c1, mC1);
+    var mR1 = mean(b.r1), sR1 = sd(b.r1, mR1);
+    var mC2 = mean(b.c2), sC2 = sd(b.c2, mC2);
+    var mR2 = mean(b.r2), sR2 = sd(b.r2, mR2);
+    var mRF = mean(b.rf), sRF = sd(b.rf, mRF);
+    
+    batchStats[bId] = {
+      c1Min: mC1 - 2*sC1, c1Max: mC1 + 2*sC1,
+      r1Min: mR1 - 2*sR1, r1Max: mR1 + 2*sR1,
+      c2Min: mC2 - 2*sC2, c2Max: mC2 + 2*sC2,
+      r2Min: mR2 - 2*sR2, r2Max: mR2 + 2*sR2,
+      rfMin: mRF - 2*sRF, count: b.c1.length
+    };
+  }
+
+  // Pass 4: In-Memory Multi-Gate Diagnostic Tag Fingerprinting
+  refData = refSheet.getDataRange().getValues();
+  mMap = buildMatrixHeaderMap(refData[0]);
+
+  var qualityOutputSubMatrix = [];
+  for (var r = 1; r < logData.length; r++) {
+    var pName = String(logData[r][hMap.programName] || "").trim();
+    var serial = String(logData[r][hMap.trueSerial] || "").trim();
+    var baseModel = String(logData[r][hMap.baseModel] || "").trim().toLowerCase().replace(/[-_\s]/g, "");
+    var cleanPName = pName.toLowerCase().replace(/[-_\s]/g, "");
+    var batchId = serial.split("-")[0].trim();
+    
+    var test1Result = "INITIALIZING"; var test2Result = "INITIALIZING"; var finalStatus = "PASS";
+    var failTags = [];
+    
+    var evalAction = String(logData[r][hMap.evaluationAction] || "").trim();
+    
+    if (pName && logData[r][0] !== "") {
+      var resolvedDynamicKey = modelToDynamicKey[baseModel] || modelToDynamicKey[cleanPName] || pName;
+      var cleanResolvedKey = resolvedDynamicKey.toLowerCase().replace(/[-_\s]/g, "");
+      
+      var refRow = null;
+      for (var mx = 1; mx < refData.length; mx++) {
+        var mKey = String(refData[mx][mMap.dynamicKey] || "").trim().toLowerCase().replace(/[-_\s]/g, "");
+        if (mKey && (mKey === cleanResolvedKey || cleanResolvedKey.indexOf(mKey) !== -1 || mKey.indexOf(cleanResolvedKey) !== -1)) {
+          refRow = refData[mx]; break;
+        }
+      }
+      
+      var lowC = parseFloat(logData[r][hMap.comp1]) || 0; var lowR = Math.abs(parseFloat(logData[r][hMap.reb1])) || 0;
+      var midC = parseFloat(logData[r][hMap.comp2]) || 0; var midR = Math.abs(parseFloat(logData[r][hMap.reb2])) || 0;
+      var sl1  = parseFloat(logData[r][hMap.slope1]) || 0; var individualRF = parseFloat(logData[r][hMap.rodForce]) || 0;
+      
+      // Global Limit Check Tagging (Test 1)
+      if (refRow) {
+        var t1Pass = true;
+        var valC1Min = parseFloat(refRow[mMap.c1Min]); var valC1Max = parseFloat(refRow[mMap.c1Max]);
+        var valR1Min = parseFloat(refRow[mMap.r1Min]); var valR1Max = parseFloat(refRow[mMap.r1Max]);
+        var valC2Min = parseFloat(refRow[mMap.c2Min]); var valC2Max = parseFloat(refRow[mMap.c2Max]);
+        var valR2Min = parseFloat(refRow[mMap.r2Min]); var valR2Max = parseFloat(refRow[mMap.r2Max]);
+        var slope1Min = parseFloat(refRow[mMap.slope1Min]) || 0;
+        
+        if (!isNaN(valC1Min)) {
+          if (lowC < valC1Min || lowC > valC1Max) { t1Pass = false; failTags.push("[C1_FAIL]"); }
+          if (lowR < valR1Min || lowR > valR1Max) { t1Pass = false; failTags.push("[R1_FAIL]"); }
+          if (midC < valC2Min || midC > valC2Max) { t1Pass = false; failTags.push("[C2_FAIL]"); }
+          if (midR < valR2Min || midR > valR2Max) { t1Pass = false; failTags.push("[R2_FAIL]"); }
+          if (sl1 < slope1Min) { t1Pass = false; failTags.push("[SLOPE_FAIL]"); }
+        }
+        test1Result = t1Pass ? "PASS" : "FAIL (BLUEPRINT)";
+      }
+      
+      // Cohort Outlier Check Tagging (Test 2)
+      var cStat = batchStats[batchId];
+      var defectAnalysis = "";
+      if (cStat && cStat.count > 2) {
+        var t2Pass = true;
+        var lowGasPressure = (individualRF < cStat.rfMin);
+        var lowC1 = (lowC < cStat.c1Min || lowC > cStat.c1Max);
+        var lowR1 = (lowR < cStat.r1Min || lowR > cStat.r1Max);
+        var lowC2 = (midC < cStat.c2Min || midC > cStat.c2Max);
+        var lowR2 = (midR < cStat.r2Min || midR > cStat.r2Max);
+        
+        if (lowGasPressure) { t2Pass = false; failTags.push("[RF_FAIL]"); }
+        if (lowC1) { t2Pass = false; failTags.push("[C1_FAIL]"); }
+        if (lowR1) { t2Pass = false; failTags.push("[R1_FAIL]"); }
+        if (lowC2) { t2Pass = false; failTags.push("[C2_FAIL]"); }
+        if (lowR2) { t2Pass = false; failTags.push("[R2_FAIL]"); }
+        
+        if (!t2Pass) {
+          if (lowGasPressure) defectAnalysis = "Gas Pressure Deficient.";
+          else if (lowC1 && lowR1) defectAnalysis = "Symmetric drop. Potential bypass.";
+          else if (lowC1) defectAnalysis = "Compression outlier variation.";
+          else if (lowR1) defectAnalysis = "Rebound outlier variation.";
+          else defectAnalysis = "Outlier variance detected.";
+        }
+        test2Result = t2Pass ? "PASS" : "FAIL (OUTLIER)";
+      }
+      
+      var uniqueFailTags = [];
+      for (var f = 0; f < failTags.length; f++) {
+        if (uniqueFailTags.indexOf(failTags[f]) === -1) uniqueFailTags.push(failTags[f]);
+      }
+      
+      var evalLower = evalAction.toLowerCase().trim();
+      var globalPass = (test1Result === "INITIALIZING" || !test1Result.includes("FAIL")) && (test2Result === "INITIALIZING" || !test2Result.includes("FAIL"));
+      var diagnosticNotes = globalPass ? "✅ SHOCK IS WITHIN TOLERANCE." : "❌ ERROR: " + uniqueFailTags.join(" ") + " | " + defectAnalysis;
+
+      // Evaluation Action Multi-Path Logic
+      if (evalLower.indexOf("override test 1") !== -1) {
+        test1Result = "PASS (OVERRIDE)";
+        var t2Passing = (test2Result.indexOf("PASS") !== -1);
+        if (t2Passing) {
+          finalStatus = "PASS (OVERRIDE)";
+          diagnosticNotes = "⚠️ MANUAL OVERRIDE: Authorized via Engineering Action.";
+        } else {
+          finalStatus = "FAIL";
+          diagnosticNotes = "⚠️ TEST 1 OVERRIDDEN | Test 2 Failure: " + uniqueFailTags.join(" ");
+        }
+      } else if (evalLower.indexOf("override test 2") !== -1) {
+        test2Result = "PASS (OVERRIDE)";
+        var t1Passing = (test1Result.indexOf("PASS") !== -1);
+        if (t1Passing) {
+          finalStatus = "PASS (OVERRIDE)";
+          diagnosticNotes = "⚠️ MANUAL OVERRIDE: Authorized via Engineering Action.";
+        } else {
+          finalStatus = "FAIL";
+          diagnosticNotes = "⚠️ TEST 2 OVERRIDDEN | Test 1 Failure: " + uniqueFailTags.join(" ");
+        }
+      } else if (evalLower.indexOf("override all") !== -1 || evalLower.indexOf("override both") !== -1) {
+        test1Result = "PASS (OVERRIDE)";
+        test2Result = "PASS (OVERRIDE)";
+        finalStatus = "PASS (OVERRIDE)";
+        diagnosticNotes = "⚠️ MANUAL OVERRIDE: Authorized via Engineering Action.";
+      } else if (evalLower.indexOf("retest required") !== -1 || evalLower === "retest") {
+        finalStatus = "HOLD (RETEST REQUIRED)";
+        diagnosticNotes = "⏳ RETEST REQUIRED: Operator to re-run shock on dyno.";
+      } else if (evalLower.indexOf("teardown required") !== -1 || evalLower === "teardown") {
+        finalStatus = "HOLD (TEARDOWN REQUIRED)";
+        diagnosticNotes = "🔧 TEARDOWN REQUIRED: Inspect internal assembly & valving.";
+      } else if (evalLower.indexOf("no issue found") !== -1 || evalLower.indexOf("no issue") !== -1) {
+        test1Result = "PASS";
+        test2Result = "PASS";
+        finalStatus = "PASS";
+        diagnosticNotes = "🛠️ TEARDOWN VALIDATED: Assembly clear.";
+      } else if (evalLower.indexOf("issue found") !== -1) {
+        finalStatus = "FAIL";
+        diagnosticNotes = "❌ ISSUE CONFIRMED: See Engineering Comments.";
+      } else if (!globalPass) {
+        finalStatus = "FAIL";
+      }
+    }
+    qualityOutputSubMatrix.push([test1Result, test2Result, finalStatus, diagnosticNotes]);
+  }
+  
+  if (qualityOutputSubMatrix.length > 0) {
+    var startColIdx = (CONFIG.COLUMNS.MASTER_DYNO_LOG.TEST_1_STATUS) || 19;
+    logSheet.getRange(2, startColIdx, qualityOutputSubMatrix.length, 4).setValues(qualityOutputSubMatrix);
+  }
   SpreadsheetApp.flush();
 }
