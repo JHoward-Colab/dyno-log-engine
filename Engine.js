@@ -358,31 +358,28 @@ function retroactiveLogRecalculate() {
   
   var mean = function(arr) { var clean = arr.filter(function(x){return !isNaN(x);}); return clean.length === 0 ? 0 : clean.reduce(function(a,b){return a+b;},0)/clean.length; };
   var sd = function(arr, m) { var clean = arr.filter(function(x){return !isNaN(x);}); return clean.length <= 1 ? 0 : Math.sqrt(clean.map(function(x){return Math.pow(x-m,2);}).reduce(function(a,b){return a+b;},0)/(clean.length - 1)); };
+  var cleanStr = function(s) { return String(s || "").trim().toLowerCase().replace(/[-_\s]/g, ""); };
 
-  var batchGroups = {};
-  var historicalGroups = {};
-
-  // STEP 0: Auto-Sync Part_Reference_Matrix rows from Program_Registry
+  // STEP 0: Auto-Sync Part_Reference_Matrix rows from Program_Registry AND Master_Dyno_Log
   var modelToDynamicKey = {};
+  var existingMatrixKeys = {};
+  for (var m = 1; m < refData.length; m++) {
+    var mk = cleanStr(refData[m][mMap.dynamicKey]);
+    if (mk) existingMatrixKeys[mk] = m + 1;
+  }
+  
+  var rowsToAppend = [];
   if (regSheet) {
     var regValues = regSheet.getDataRange().getValues();
     var regCols = CONFIG.COLUMNS.PROGRAM_REGISTRY;
-    
-    var existingMatrixKeys = {};
-    for (var m = 1; m < refData.length; m++) {
-      var mk = String(refData[m][mMap.dynamicKey] || "").toLowerCase().replace(/[-_\s]/g, "");
-      if (mk) existingMatrixKeys[mk] = true;
-    }
-    
-    var rowsToAppend = [];
     for (var k = 1; k < regValues.length; k++) {
-      var bm = String(regValues[k][regCols.BASE_MODEL - 1] || "").trim().toLowerCase().replace(/[-_\s]/g, "");
+      var bm = cleanStr(regValues[k][regCols.BASE_MODEL - 1]);
       var pn = String(regValues[k][regCols.PROGRAM_NAME - 1] || "").trim();
-      var pnClean = pn.toLowerCase().replace(/[-_\s]/g, "");
+      var pnClean = cleanStr(pn);
       var dk = String(regValues[k][regCols.DYNAMIC_KEY - 1] || "").trim();
       
       var targetKey = dk || pn || regValues[k][regCols.BASE_MODEL - 1];
-      var cleanTargetKey = targetKey.toLowerCase().replace(/[-_\s]/g, "");
+      var cleanTargetKey = cleanStr(targetKey);
 
       if (bm) modelToDynamicKey[bm] = targetKey;
       if (pnClean) modelToDynamicKey[pnClean] = targetKey;
@@ -392,98 +389,76 @@ function retroactiveLogRecalculate() {
         for (var colIdx = 0; colIdx < 42; colIdx++) newRefRow.push("");
         newRefRow[mMap.dynamicKey] = targetKey;
         rowsToAppend.push(newRefRow);
-        existingMatrixKeys[cleanTargetKey] = true;
+        existingMatrixKeys[cleanTargetKey] = refData.length + rowsToAppend.length;
       }
-    }
-
-    if (rowsToAppend.length > 0) {
-      refSheet.getRange(refSheet.getLastRow() + 1, 1, rowsToAppend.length, 42).setValues(rowsToAppend);
-      SpreadsheetApp.flush();
-      refData = refSheet.getDataRange().getValues(); // Refresh cache
     }
   }
 
-  // Pass 1: Filter & Deduplicate for SPC Baseline Pool
+  // Also auto-append any program name present in Master_Dyno_Log missing from Part_Reference_Matrix
   for (var r = 1; r < logData.length; r++) {
-    var prog = String(logData[r][hMap.programName] || "").trim();
-    var serial = String(logData[r][hMap.trueSerial] || "").trim();
-    var baseModel = String(logData[r][hMap.baseModel] || "").trim().toLowerCase().replace(/[-_\s]/g, "");
-    var cleanProgName = prog.toLowerCase().replace(/[-_\s]/g, "");
-    var overallStatus = String(logData[r][hMap.overallStatus] || "").toUpperCase().trim();
-    if (logData[r][0] === "") continue;
-    
-    if (serial !== "") {
-      var batchId = serial.split("-")[0].trim();
-      if (!batchGroups[batchId]) {
-        batchGroups[batchId] = { c1: [], r1: [], c2: [], r2: [], rf: [], rowReferences: [] };
-      }
-      batchGroups[batchId].c1.push(parseFloat(logData[r][hMap.comp1]) || 0);
-      batchGroups[batchId].r1.push(Math.abs(parseFloat(logData[r][hMap.reb1])) || 0);
-      batchGroups[batchId].c2.push(parseFloat(logData[r][hMap.comp2]) || 0);
-      batchGroups[batchId].r2.push(Math.abs(parseFloat(logData[r][hMap.reb2])) || 0);
-      batchGroups[batchId].rf.push(parseFloat(logData[r][hMap.rodForce]) || 0);
-      batchGroups[batchId].rowReferences.push(r);
-    }
-    
-    var resolvedGroupKey = modelToDynamicKey[baseModel] || modelToDynamicKey[cleanProgName] || prog;
-    
-    // Self-healing check: Accept PASS, blank, initializing, or failed blueprint runs when matrix is unseeded
-    var isPassingRun = overallStatus.indexOf("PASS") !== -1 || overallStatus === "" || overallStatus === "INITIALIZING" || overallStatus.indexOf("FAIL") !== -1;
-
-    if (resolvedGroupKey !== "") {
-      if (!historicalGroups[resolvedGroupKey]) {
-        historicalGroups[resolvedGroupKey] = {};
-      }
-      logData[r]._rowIdx = r + 1;
-      
-      var serialKey = serial !== "" ? serial.toLowerCase() : ("row_" + (r + 1));
-      historicalGroups[resolvedGroupKey][serialKey] = logData[r];
+    var pNameRaw = String(logData[r][hMap.programName] || "").trim();
+    var cleanP = cleanStr(pNameRaw);
+    if (cleanP && !existingMatrixKeys[cleanP]) {
+      var newRefRow = [];
+      for (var colIdx = 0; colIdx < 42; colIdx++) newRefRow.push("");
+      newRefRow[mMap.dynamicKey] = pNameRaw;
+      rowsToAppend.push(newRefRow);
+      existingMatrixKeys[cleanP] = refData.length + rowsToAppend.length;
     }
   }
-  
-  // Pass 2: Calculate Baselines across speeds
-  for (var pName in historicalGroups) {
-    var serialMap = historicalGroups[pName];
-    var pool = Object.keys(serialMap).map(function(k) { return serialMap[k]; });
-    var countN = pool.length;
-    var cleanPName = pName.replace(/[-_\s]/g, "").toLowerCase();
-    
-    refData = refSheet.getDataRange().getValues();
-    
-    var refRowIdx = -1;
-    for (var mx = 1; mx < refData.length; mx++) {
-      var matrixKeyRaw = String(refData[mx][mMap.dynamicKey] || "").trim();
-      if (!matrixKeyRaw) continue;
-      var cleanMatrixKey = matrixKeyRaw.replace(/[-_\s]/g, "").toLowerCase();
-      
-      if (cleanMatrixKey === cleanPName || 
-         (cleanMatrixKey.length >= 6 && cleanPName.indexOf(cleanMatrixKey) !== -1) || 
-         (cleanPName.length >= 6 && cleanMatrixKey.indexOf(cleanPName) !== -1)) {
-        refRowIdx = mx + 1;
-        break;
+
+  if (rowsToAppend.length > 0) {
+    refSheet.getRange(refSheet.getLastRow() + 1, 1, rowsToAppend.length, 42).setValues(rowsToAppend);
+    SpreadsheetApp.flush();
+    refData = refSheet.getDataRange().getValues(); // Refresh cache
+  }
+
+  // STEP 1: Direct Matrix-Driven Baseline Recalculation
+  // For every row in Part_Reference_Matrix, gather matching rows from Master_Dyno_Log
+  for (var mx = 1; mx < refData.length; mx++) {
+    var matrixKey = String(refData[mx][mMap.dynamicKey] || "").trim();
+    if (!matrixKey) continue;
+    var cMatrixKey = cleanStr(matrixKey);
+    var refRowIdx = mx + 1;
+
+    var pool = [];
+    for (var r = 1; r < logData.length; r++) {
+      var logProg = String(logData[r][hMap.programName] || "").trim();
+      var logBaseModel = String(logData[r][hMap.baseModel] || "").trim();
+      var cLogProg = cleanStr(logProg);
+      var cLogBase = cleanStr(logBaseModel);
+
+      // Robust fuzzy match between Matrix Key and Dyno Log row
+      var isMatch = (cMatrixKey === cLogProg || cMatrixKey === cLogBase ||
+                     (cMatrixKey.length >= 5 && cLogProg.indexOf(cMatrixKey) !== -1) ||
+                     (cLogProg.length >= 5 && cMatrixKey.indexOf(cLogProg) !== -1) ||
+                     (cMatrixKey.length >= 5 && cLogBase.indexOf(cMatrixKey) !== -1) ||
+                     (cLogBase.length >= 5 && cMatrixKey.indexOf(cLogBase) !== -1));
+
+      if (isMatch) {
+        logData[r]._rowIdx = r + 1;
+        pool.push(logData[r]);
       }
     }
-    
-    if (refRowIdx === -1) {
-      refRowIdx = refSheet.getLastRow() + 1;
-      refSheet.getRange(refRowIdx, mMap.dynamicKey + 1).setValue(pName);
-    }
-    
-    var row = (refRowIdx <= refData.length) ? refData[refRowIdx - 1] : [pName];
-    var c1MinRaw = row ? row[mMap.c1Min] : "";
+
+    if (pool.length === 0) continue;
+
+    var countN = pool.length;
+    var row = refData[mx];
+    var c1MinRaw = row[mMap.c1Min];
     var isSeeded = c1MinRaw !== "" && c1MinRaw !== null && c1MinRaw !== undefined && !isNaN(parseFloat(c1MinRaw));
-    
+
     var c1Vals = [], r1Vals = [], c2Vals = [], r2Vals = [];
     var s1Vals = [], s2Vals = [], s3Vals = [];
     var sl1Vals = [], la1Vals = [], sl2Vals = [];
-    
+
     for (var s = 0; s < pool.length; s++) {
       var d = pool[s];
       c1Vals.push(parseFloat(d[hMap.comp1]) || 0);
       r1Vals.push(Math.abs(parseFloat(d[hMap.reb1])) || 0);
       c2Vals.push(parseFloat(d[hMap.comp2]) || 0);
       r2Vals.push(Math.abs(parseFloat(d[hMap.reb2])) || 0);
-      
+
       if (!isNaN(parseFloat(d[hMap.slope1]))) sl1Vals.push(parseFloat(d[hMap.slope1]));
       if (!isNaN(parseFloat(d[hMap.loopArea1]))) la1Vals.push(parseFloat(d[hMap.loopArea1]));
       if (!isNaN(parseFloat(d[hMap.slope2]))) sl2Vals.push(parseFloat(d[hMap.slope2]));
@@ -491,30 +466,30 @@ function retroactiveLogRecalculate() {
       var sp1 = snapToNominalSpeed(d[hMap.speed1]);
       var sp2 = snapToNominalSpeed(d[hMap.speed2]);
       var sp3 = snapToNominalSpeed(d[hMap.speed3]);
-      
+
       if (sp1 > 0) s1Vals.push(sp1);
       if (sp2 > 0) s2Vals.push(sp2);
       if (sp3 > 0) s3Vals.push(sp3);
     }
-    
+
     var rawSp1 = s1Vals.length > 0 ? mean(s1Vals) : 100;
     var rawSp2 = s2Vals.length > 0 ? mean(s2Vals) : 400;
     var rawSp3 = s3Vals.length > 0 ? mean(s3Vals) : 1000;
-    
+
     var snappedSp1 = snapToNominalSpeed(rawSp1);
     var snappedSp2 = snapToNominalSpeed(rawSp2);
     var snappedSp3 = snapToNominalSpeed(rawSp3);
-    
+
     if (snappedSp1 <= 100 || snappedSp3 <= 1000) {
       snappedSp1 = 100; snappedSp2 = 400; snappedSp3 = 1000;
     } else {
       snappedSp1 = 500; snappedSp2 = 1000; snappedSp3 = 2500;
     }
-    
+
     if (mMap.speed1 !== undefined) refSheet.getRange(refRowIdx, mMap.speed1 + 1).setValue(snappedSp1);
     if (mMap.speed2 !== undefined) refSheet.getRange(refRowIdx, mMap.speed2 + 1).setValue(snappedSp2);
     if (mMap.speed3 !== undefined) refSheet.getRange(refRowIdx, mMap.speed3 + 1).setValue(snappedSp3);
-    
+
     for (var s = 0; s < pool.length; s++) {
       var d = pool[s];
       var rIdx = d._rowIdx;
@@ -524,7 +499,7 @@ function retroactiveLogRecalculate() {
         if (d[hMap.speed3] !== snappedSp3) logSheet.getRange(rIdx, hMap.speed3 + 1).setValue(snappedSp3);
       }
     }
-    
+
     var c1M = mean(c1Vals), c1S = sd(c1Vals, c1M);
     var r1M = mean(r1Vals), r1S = sd(r1Vals, r1M);
     var c2M = mean(c2Vals), c2S = sd(c2Vals, c2M);
@@ -539,7 +514,7 @@ function retroactiveLogRecalculate() {
       if (mMap.c2SD !== undefined) refSheet.getRange(refRowIdx, mMap.c2SD + 1).setValue(parseFloat(c2S.toFixed(2)));
       if (mMap.r2Mean !== undefined) refSheet.getRange(refRowIdx, mMap.r2Mean + 1).setValue(parseFloat(r2M.toFixed(1)));
       if (mMap.r2SD !== undefined) refSheet.getRange(refRowIdx, mMap.r2SD + 1).setValue(parseFloat(r2S.toFixed(2)));
-      
+
       if (countN > 2) {
         if (mMap.c1Min !== undefined) refSheet.getRange(refRowIdx, mMap.c1Min + 1).setValue(Math.max(0, parseFloat((c1M - 3*c1S).toFixed(1))));
         if (mMap.c1Max !== undefined) refSheet.getRange(refRowIdx, mMap.c1Max + 1).setValue(parseFloat((c1M + 3*c1S).toFixed(1)));
@@ -584,7 +559,7 @@ function retroactiveLogRecalculate() {
 
     if (mMap.compDriftPct !== undefined) refSheet.getRange(refRowIdx, mMap.compDriftPct + 1).setValue(parseFloat(compDrift.toFixed(2)));
     if (mMap.rebDriftPct !== undefined) refSheet.getRange(refRowIdx, mMap.rebDriftPct + 1).setValue(parseFloat(rebDrift.toFixed(2)));
-    
+
     var maxDrift = Math.max(Math.abs(compDrift), Math.abs(rebDrift));
     var procHealth = "";
     if (maxDrift > 10) {
@@ -609,7 +584,24 @@ function retroactiveLogRecalculate() {
     if (mMap.sampleCount !== undefined) refSheet.getRange(refRowIdx, mMap.sampleCount + 1).setValue(countN);
   }
 
-  // Pass 3: Rolling Batch Math Limits
+  // STEP 2: Compute Batch Math Limits across cohorts
+  var batchGroups = {};
+  for (var r = 1; r < logData.length; r++) {
+    var serial = String(logData[r][hMap.trueSerial] || "").trim();
+    if (serial !== "") {
+      var batchId = serial.split("-")[0].trim();
+      if (!batchGroups[batchId]) {
+        batchGroups[batchId] = { c1: [], r1: [], c2: [], r2: [], rf: [], rowReferences: [] };
+      }
+      batchGroups[batchId].c1.push(parseFloat(logData[r][hMap.comp1]) || 0);
+      batchGroups[batchId].r1.push(Math.abs(parseFloat(logData[r][hMap.reb1])) || 0);
+      batchGroups[batchId].c2.push(parseFloat(logData[r][hMap.comp2]) || 0);
+      batchGroups[batchId].r2.push(Math.abs(parseFloat(logData[r][hMap.reb2])) || 0);
+      batchGroups[batchId].rf.push(parseFloat(logData[r][hMap.rodForce]) || 0);
+      batchGroups[batchId].rowReferences.push(r);
+    }
+  }
+
   var batchStats = {};
   for (var bId in batchGroups) {
     var b = batchGroups[bId];
@@ -628,7 +620,7 @@ function retroactiveLogRecalculate() {
     };
   }
 
-  // Pass 4: In-Memory Multi-Gate Diagnostic Tag Fingerprinting
+  // STEP 3: Multi-Gate Quality Diagnostics for Master_Dyno_Log
   refData = refSheet.getDataRange().getValues();
   mMap = buildMatrixHeaderMap(refData[0]);
 
@@ -636,8 +628,9 @@ function retroactiveLogRecalculate() {
   for (var r = 1; r < logData.length; r++) {
     var pName = String(logData[r][hMap.programName] || "").trim();
     var serial = String(logData[r][hMap.trueSerial] || "").trim();
-    var baseModel = String(logData[r][hMap.baseModel] || "").trim().toLowerCase().replace(/[-_\s]/g, "");
-    var cleanPName = pName.toLowerCase().replace(/[-_\s]/g, "");
+    var baseModel = String(logData[r][hMap.baseModel] || "").trim();
+    var cleanPName = cleanStr(pName);
+    var cleanBaseModel = cleanStr(baseModel);
     var batchId = serial.split("-")[0].trim();
     
     var test1Result = "INITIALIZING"; var test2Result = "INITIALIZING"; var finalStatus = "PASS";
@@ -645,13 +638,13 @@ function retroactiveLogRecalculate() {
     
     var evalAction = String(logData[r][hMap.evaluationAction] || "").trim();
     
-    if (pName && logData[r][0] !== "") {
-      var resolvedDynamicKey = modelToDynamicKey[baseModel] || modelToDynamicKey[cleanPName] || pName;
-      var cleanResolvedKey = resolvedDynamicKey.toLowerCase().replace(/[-_\s]/g, "");
+    if (pName) {
+      var resolvedDynamicKey = modelToDynamicKey[cleanBaseModel] || modelToDynamicKey[cleanPName] || pName;
+      var cleanResolvedKey = cleanStr(resolvedDynamicKey);
       
       var refRow = null;
       for (var mx = 1; mx < refData.length; mx++) {
-        var mKey = String(refData[mx][mMap.dynamicKey] || "").trim().toLowerCase().replace(/[-_\s]/g, "");
+        var mKey = cleanStr(refData[mx][mMap.dynamicKey]);
         if (mKey && (mKey === cleanResolvedKey || cleanResolvedKey.indexOf(mKey) !== -1 || mKey.indexOf(cleanResolvedKey) !== -1)) {
           refRow = refData[mx]; break;
         }
@@ -716,7 +709,6 @@ function retroactiveLogRecalculate() {
       var globalPass = (test1Result === "INITIALIZING" || !test1Result.includes("FAIL")) && (test2Result === "INITIALIZING" || !test2Result.includes("FAIL"));
       var diagnosticNotes = globalPass ? "✅ SHOCK IS WITHIN TOLERANCE." : "❌ ERROR: " + uniqueFailTags.join(" ") + " | " + defectAnalysis;
 
-      // Evaluation Action Multi-Path Logic
       if (evalLower.indexOf("override test 1") !== -1) {
         test1Result = "PASS (OVERRIDE)";
         var t2Passing = (test2Result.indexOf("PASS") !== -1);
