@@ -68,7 +68,6 @@ function buildHeaderMap(headerRow) {
   map.evaluationAction = logCols.EVALUATION_ACTION - 1;
   map.engComments = logCols.ENG_COMMENTS - 1;
 
-  // Dynamic header scanner fallback
   for (var i = 0; i < headerRow.length; i++) {
     var cleanH = String(headerRow[i] || "").toLowerCase().replace(/[^a-z0-9]/g, "");
     if (cleanH.indexOf("diagnostic") !== -1) continue;
@@ -379,13 +378,9 @@ function retroactiveLogRecalculate() {
     }
   }
 
-  // Pass 1: Filter & Deduplicate for SPC Baseline Pool
+  // STEP 1: Compute Batch Math Limits across cohorts
   for (var r = 1; r < logData.length; r++) {
-    var prog = String(logData[r][hMap.programName] || "").trim();
     var serial = String(logData[r][hMap.trueSerial] || "").trim();
-    var baseModel = String(logData[r][hMap.baseModel] || "").trim().toLowerCase().replace(/[-_\s]/g, "");
-    var cleanProgName = prog.toLowerCase().replace(/[-_\s]/g, "");
-    var overallStatus = String(logData[r][hMap.overallStatus] || "").toUpperCase().trim();
     if (logData[r][0] === "") continue;
     
     if (serial !== "") {
@@ -400,190 +395,8 @@ function retroactiveLogRecalculate() {
       batchGroups[batchId].rf.push(parseFloat(logData[r][hMap.rodForce]) || 0);
       batchGroups[batchId].rowReferences.push(r);
     }
-    
-    // Resolve DYNAMIC_KEY via Base Model or Program Name lookup
-    var resolvedGroupKey = modelToDynamicKey[baseModel] || modelToDynamicKey[cleanProgName] || prog;
-    var isPassingRun = overallStatus.indexOf("PASS") !== -1;
-
-    if (resolvedGroupKey !== "" && isPassingRun) {
-      if (!historicalGroups[resolvedGroupKey]) {
-        historicalGroups[resolvedGroupKey] = {};
-      }
-      logData[r]._rowIdx = r + 1;
-      
-      var serialKey = serial !== "" ? serial.toLowerCase() : ("row_" + (r + 1));
-      historicalGroups[resolvedGroupKey][serialKey] = logData[r];
-    }
-  }
-  
-  // Pass 2: Calculate Baselines across speeds
-  for (var pName in historicalGroups) {
-    var serialMap = historicalGroups[pName];
-    var pool = Object.keys(serialMap).map(function(k) { return serialMap[k]; });
-    var countN = pool.length;
-    var cleanPName = pName.replace(/[-_\s]/g, "").toLowerCase();
-    
-    var refRowIdx = -1;
-    for (var mx = 1; mx < refData.length; mx++) {
-      var matrixKeyRaw = String(refData[mx][mMap.dynamicKey] || "").trim();
-      if (!matrixKeyRaw) continue;
-      var cleanMatrixKey = matrixKeyRaw.replace(/[-_\s]/g, "").toLowerCase();
-      
-      if (cleanMatrixKey === cleanPName || 
-         (cleanMatrixKey.length >= 6 && cleanPName.indexOf(cleanMatrixKey) !== -1) || 
-         (cleanPName.length >= 6 && cleanMatrixKey.indexOf(cleanPName) !== -1)) {
-        refRowIdx = mx + 1;
-        break;
-      }
-    }
-    
-    if (refRowIdx !== -1) {
-      var row = refData[refRowIdx - 1];
-      var c1MinRaw = row[mMap.c1Min];
-      var isSeeded = c1MinRaw !== "" && c1MinRaw !== null && !isNaN(parseFloat(c1MinRaw));
-      
-      var c1Vals = [], r1Vals = [], c2Vals = [], r2Vals = [];
-      var s1Vals = [], s2Vals = [], s3Vals = [];
-      var sl1Vals = [], la1Vals = [], sl2Vals = [];
-      
-      for (var s = 0; s < pool.length; s++) {
-        var d = pool[s];
-        c1Vals.push(parseFloat(d[hMap.comp1]) || 0);
-        r1Vals.push(Math.abs(parseFloat(d[hMap.reb1])) || 0);
-        c2Vals.push(parseFloat(d[hMap.comp2]) || 0);
-        r2Vals.push(Math.abs(parseFloat(d[hMap.reb2])) || 0);
-        
-        if (!isNaN(parseFloat(d[hMap.slope1]))) sl1Vals.push(parseFloat(d[hMap.slope1]));
-        if (!isNaN(parseFloat(d[hMap.loopArea1]))) la1Vals.push(parseFloat(d[hMap.loopArea1]));
-        if (!isNaN(parseFloat(d[hMap.slope2]))) sl2Vals.push(parseFloat(d[hMap.slope2]));
-
-        var sp1 = snapToNominalSpeed(d[hMap.speed1]);
-        var sp2 = snapToNominalSpeed(d[hMap.speed2]);
-        var sp3 = snapToNominalSpeed(d[hMap.speed3]);
-        
-        if (sp1 > 0) s1Vals.push(sp1);
-        if (sp2 > 0) s2Vals.push(sp2);
-        if (sp3 > 0) s3Vals.push(sp3);
-      }
-      
-      var rawSp1 = s1Vals.length > 0 ? mean(s1Vals) : 100;
-      var rawSp2 = s2Vals.length > 0 ? mean(s2Vals) : 400;
-      var rawSp3 = s3Vals.length > 0 ? mean(s3Vals) : 1000;
-      
-      var snappedSp1 = snapToNominalSpeed(rawSp1);
-      var snappedSp2 = snapToNominalSpeed(rawSp2);
-      var snappedSp3 = snapToNominalSpeed(rawSp3);
-      
-      if (snappedSp1 <= 100 || snappedSp3 <= 1000) {
-        snappedSp1 = 100; snappedSp2 = 400; snappedSp3 = 1000;
-      } else {
-        snappedSp1 = 500; snappedSp2 = 1000; snappedSp3 = 2500;
-      }
-      
-      if (mMap.speed1 !== undefined) refSheet.getRange(refRowIdx, mMap.speed1 + 1).setValue(snappedSp1);
-      if (mMap.speed2 !== undefined) refSheet.getRange(refRowIdx, mMap.speed2 + 1).setValue(snappedSp2);
-      if (mMap.speed3 !== undefined) refSheet.getRange(refRowIdx, mMap.speed3 + 1).setValue(snappedSp3);
-      
-      for (var s = 0; s < pool.length; s++) {
-        var d = pool[s];
-        var rIdx = d._rowIdx;
-        if (rIdx) {
-          if (d[hMap.speed1] !== snappedSp1) logSheet.getRange(rIdx, hMap.speed1 + 1).setValue(snappedSp1);
-          if (d[hMap.speed2] !== snappedSp2) logSheet.getRange(rIdx, hMap.speed2 + 1).setValue(snappedSp2);
-          if (d[hMap.speed3] !== snappedSp3) logSheet.getRange(rIdx, hMap.speed3 + 1).setValue(snappedSp3);
-        }
-      }
-      
-      var c1M = mean(c1Vals), c1S = sd(c1Vals, c1M);
-      var r1M = mean(r1Vals), r1S = sd(r1Vals, r1M);
-      var c2M = mean(c2Vals), c2S = sd(c2Vals, c2M);
-      var r2M = mean(r2Vals), r2S = sd(r2Vals, r2M);
-
-      if (!isSeeded) {
-        if (mMap.c1Mean !== undefined) refSheet.getRange(refRowIdx, mMap.c1Mean + 1).setValue(parseFloat(c1M.toFixed(1)));
-        if (mMap.c1SD !== undefined) refSheet.getRange(refRowIdx, mMap.c1SD + 1).setValue(parseFloat(c1S.toFixed(2)));
-        if (mMap.r1Mean !== undefined) refSheet.getRange(refRowIdx, mMap.r1Mean + 1).setValue(parseFloat(r1M.toFixed(1)));
-        if (mMap.r1SD !== undefined) refSheet.getRange(refRowIdx, mMap.r1SD + 1).setValue(parseFloat(r1S.toFixed(2)));
-        if (mMap.c2Mean !== undefined) refSheet.getRange(refRowIdx, mMap.c2Mean + 1).setValue(parseFloat(c2M.toFixed(1)));
-        if (mMap.c2SD !== undefined) refSheet.getRange(refRowIdx, mMap.c2SD + 1).setValue(parseFloat(c2S.toFixed(2)));
-        if (mMap.r2Mean !== undefined) refSheet.getRange(refRowIdx, mMap.r2Mean + 1).setValue(parseFloat(r2M.toFixed(1)));
-        if (mMap.r2SD !== undefined) refSheet.getRange(refRowIdx, mMap.r2SD + 1).setValue(parseFloat(r2S.toFixed(2)));
-        
-        if (countN > 2) {
-          if (mMap.c1Min !== undefined) refSheet.getRange(refRowIdx, mMap.c1Min + 1).setValue(Math.max(0, parseFloat((c1M - 3*c1S).toFixed(1))));
-          if (mMap.c1Max !== undefined) refSheet.getRange(refRowIdx, mMap.c1Max + 1).setValue(parseFloat((c1M + 3*c1S).toFixed(1)));
-          if (mMap.r1Min !== undefined) refSheet.getRange(refRowIdx, mMap.r1Min + 1).setValue(Math.max(0, parseFloat((r1M - 3*r1S).toFixed(1))));
-          if (mMap.r1Max !== undefined) refSheet.getRange(refRowIdx, mMap.r1Max + 1).setValue(parseFloat((r1M + 3*r1S).toFixed(1)));
-          if (mMap.c2Min !== undefined) refSheet.getRange(refRowIdx, mMap.c2Min + 1).setValue(Math.max(0, parseFloat((c2M - 3*c2S).toFixed(1))));
-          if (mMap.c2Max !== undefined) refSheet.getRange(refRowIdx, mMap.c2Max + 1).setValue(parseFloat((c2M + 3*c2S).toFixed(1)));
-          if (mMap.r2Min !== undefined) refSheet.getRange(refRowIdx, mMap.r2Min + 1).setValue(Math.max(0, parseFloat((r2M - 3*r2S).toFixed(1))));
-          if (mMap.r2Max !== undefined) refSheet.getRange(refRowIdx, mMap.r2Max + 1).setValue(parseFloat((r2M + 3*r2S).toFixed(1)));
-        }
-      }
-
-      // Populate Minimum Slopes & Loop Area Metrics (Columns M, N, W)
-      if (sl1Vals.length > 0 && mMap.slope1Min !== undefined) refSheet.getRange(refRowIdx, mMap.slope1Min + 1).setValue(parseFloat(Math.min.apply(null, sl1Vals).toFixed(1)));
-      if (la1Vals.length > 0 && mMap.loopArea1Min !== undefined) refSheet.getRange(refRowIdx, mMap.loopArea1Min + 1).setValue(parseFloat(Math.min.apply(null, la1Vals).toFixed(1)));
-      if (sl2Vals.length > 0 && mMap.slope2Min !== undefined) refSheet.getRange(refRowIdx, mMap.slope2Min + 1).setValue(parseFloat(Math.min.apply(null, sl2Vals).toFixed(1)));
-
-      // Populate Engineering SPC Metrics (Columns AG to AN)
-      var origComp = parseFloat(row[mMap.origCompBase]);
-      if (isNaN(origComp) || origComp === 0) {
-        origComp = c1M;
-        if (mMap.origCompBase !== undefined) refSheet.getRange(refRowIdx, mMap.origCompBase + 1).setValue(parseFloat(origComp.toFixed(1)));
-      }
-
-      var origReb = parseFloat(row[mMap.origRebBase]);
-      if (isNaN(origReb) || origReb === 0) {
-        origReb = r1M;
-        if (mMap.origRebBase !== undefined) refSheet.getRange(refRowIdx, mMap.origRebBase + 1).setValue(parseFloat(origReb.toFixed(1)));
-      }
-
-      if (mMap.rawCompSD !== undefined) refSheet.getRange(refRowIdx, mMap.rawCompSD + 1).setValue(parseFloat(c1S.toFixed(2)));
-      if (mMap.rawRebSD !== undefined) refSheet.getRange(refRowIdx, mMap.rawRebSD + 1).setValue(parseFloat(r1S.toFixed(2)));
-
-      var cMin = parseFloat(row[mMap.c1Min]), cMax = parseFloat(row[mMap.c1Max]);
-      var rMin = parseFloat(row[mMap.r1Min]), rMax = parseFloat(row[mMap.r1Max]);
-      var cWidth = (!isNaN(cMin) && !isNaN(cMax)) ? (cMax - cMin) : (6 * c1S);
-      var rWidth = (!isNaN(rMin) && !isNaN(rMax)) ? (rMax - rMin) : (6 * r1S);
-
-      if (mMap.compRangeWidth !== undefined) refSheet.getRange(refRowIdx, mMap.compRangeWidth + 1).setValue(parseFloat(cWidth.toFixed(1)));
-      if (mMap.rebRangeWidth !== undefined) refSheet.getRange(refRowIdx, mMap.rebRangeWidth + 1).setValue(parseFloat(rWidth.toFixed(1)));
-
-      var compDrift = origComp !== 0 ? (((c1M - origComp) / origComp) * 100) : 0;
-      var rebDrift  = origReb !== 0 ? (((r1M - origReb) / origReb) * 100) : 0;
-
-      if (mMap.compDriftPct !== undefined) refSheet.getRange(refRowIdx, mMap.compDriftPct + 1).setValue(parseFloat(compDrift.toFixed(2)));
-      if (mMap.rebDriftPct !== undefined) refSheet.getRange(refRowIdx, mMap.rebDriftPct + 1).setValue(parseFloat(rebDrift.toFixed(2)));
-      
-      // Update Column AO: Health Stamp
-      var maxDrift = Math.max(Math.abs(compDrift), Math.abs(rebDrift));
-      var procHealth = "";
-      if (maxDrift > 10) {
-        procHealth = "🔴 WARNING: UNACCEPTABLE DRIFT (" + maxDrift.toFixed(1) + "%)";
-      } else if (isSeeded) {
-        procHealth = "🟢 Stage 0: SEEDED BLUEPRINT ACTIVE (3σ)";
-      } else if (countN >= 100) {
-        procHealth = "🟢 Stage 4: MATURE SPC LOCKED (3σ)";
-      } else {
-        procHealth = "🟡 Stage 1: BUILDING BASELINE (" + countN + " samples)";
-      }
-      if (mMap.healthStamp !== undefined) refSheet.getRange(refRowIdx, mMap.healthStamp + 1).setValue(procHealth);
-
-      // Update Column AP: Control Mode
-      var controlModeText = "MANUAL GRACE LIMITS LOADED";
-      if (countN >= 10 && !isSeeded) {
-        controlModeText = "AUTOMATED STATISTICAL SPC LAYER ACTIVE";
-      } else if (countN >= 10 && isSeeded) {
-        controlModeText = "HYBRID: SEEDED BLUEPRINT WITH ACTIVE SPC";
-      }
-      if (mMap.controlMode !== undefined) refSheet.getRange(refRowIdx, mMap.controlMode + 1).setValue(controlModeText);
-
-      if (mMap.sampleCount !== undefined) refSheet.getRange(refRowIdx, mMap.sampleCount + 1).setValue(countN);
-    }
   }
 
-  // Pass 3: Rolling Batch Math Limits
   var batchStats = {};
   for (var bId in batchGroups) {
     var b = batchGroups[bId];
@@ -602,7 +415,7 @@ function retroactiveLogRecalculate() {
     };
   }
 
-  // Pass 4: In-Memory Multi-Gate Diagnostic Tag Fingerprinting
+  // STEP 2: Evaluate Pass/Fail Status & Diagnostics for Master_Dyno_Log (First Pass)
   var qualityOutputSubMatrix = [];
   for (var r = 1; r < logData.length; r++) {
     var pName = String(logData[r][hMap.programName] || "").trim();
@@ -687,7 +500,6 @@ function retroactiveLogRecalculate() {
       var globalPass = (test1Result === "INITIALIZING" || !test1Result.includes("FAIL")) && (test2Result === "INITIALIZING" || !test2Result.includes("FAIL"));
       var diagnosticNotes = globalPass ? "✅ SHOCK IS WITHIN TOLERANCE." : "❌ ERROR: " + uniqueFailTags.join(" ") + " | " + defectAnalysis;
 
-      // Evaluation Action Multi-Path Logic
       if (evalLower.indexOf("override test 1") !== -1) {
         test1Result = "PASS (OVERRIDE)";
         var t2Passing = (test2Result.indexOf("PASS") !== -1);
@@ -731,12 +543,214 @@ function retroactiveLogRecalculate() {
         finalStatus = "FAIL";
       }
     }
+
+    // Store in-memory for log Sheet write and baseline calculations
+    logData[r][hMap.test1Status] = test1Result;
+    logData[r][hMap.test2Status] = test2Result;
+    logData[r][hMap.overallStatus] = finalStatus;
+    logData[r][hMap.diagnostics] = diagnosticNotes;
+
     qualityOutputSubMatrix.push([test1Result, test2Result, finalStatus, diagnosticNotes]);
   }
-  
+
+  // Write calculated status directly to logSheet
   if (qualityOutputSubMatrix.length > 0) {
     var startColIdx = (CONFIG.COLUMNS.MASTER_DYNO_LOG.TEST_1_STATUS) || 19;
     logSheet.getRange(2, startColIdx, qualityOutputSubMatrix.length, 4).setValues(qualityOutputSubMatrix);
   }
+
+  // STEP 3: Filter & Deduplicate for SPC Baseline Pool (Using Fresh Pass/Fail Data)
+  for (var r = 1; r < logData.length; r++) {
+    var prog = String(logData[r][hMap.programName] || "").trim();
+    var serial = String(logData[r][hMap.trueSerial] || "").trim();
+    var baseModel = String(logData[r][hMap.baseModel] || "").trim().toLowerCase().replace(/[-_\s]/g, "");
+    var cleanProgName = prog.toLowerCase().replace(/[-_\s]/g, "");
+    var overallStatus = String(logData[r][hMap.overallStatus] || "").toUpperCase().trim();
+    if (logData[r][0] === "") continue;
+
+    var resolvedGroupKey = modelToDynamicKey[baseModel] || modelToDynamicKey[cleanProgName] || prog;
+    var isPassingRun = overallStatus.indexOf("PASS") !== -1 || overallStatus === "" || overallStatus === "INITIALIZING";
+
+    if (resolvedGroupKey !== "" && isPassingRun) {
+      if (!historicalGroups[resolvedGroupKey]) {
+        historicalGroups[resolvedGroupKey] = {};
+      }
+      logData[r]._rowIdx = r + 1;
+      
+      var serialKey = serial !== "" ? serial.toLowerCase() : ("row_" + (r + 1));
+      historicalGroups[resolvedGroupKey][serialKey] = logData[r];
+    }
+  }
+
+  // STEP 4: Calculate Baselines and Write/Auto-Append to Part_Reference_Matrix
+  for (var pName in historicalGroups) {
+    var serialMap = historicalGroups[pName];
+    var pool = Object.keys(serialMap).map(function(k) { return serialMap[k]; });
+    var countN = pool.length;
+    var cleanPName = pName.replace(/[-_\s]/g, "").toLowerCase();
+    
+    // Refresh refData
+    refData = refSheet.getDataRange().getValues();
+    
+    var refRowIdx = -1;
+    for (var mx = 1; mx < refData.length; mx++) {
+      var matrixKeyRaw = String(refData[mx][mMap.dynamicKey] || "").trim();
+      if (!matrixKeyRaw) continue;
+      var cleanMatrixKey = matrixKeyRaw.replace(/[-_\s]/g, "").toLowerCase();
+      
+      if (cleanMatrixKey === cleanPName || 
+         (cleanMatrixKey.length >= 6 && cleanPName.indexOf(cleanMatrixKey) !== -1) || 
+         (cleanPName.length >= 6 && cleanMatrixKey.indexOf(cleanPName) !== -1)) {
+        refRowIdx = mx + 1;
+        break;
+      }
+    }
+    
+    // Auto-append missing program key if refRowIdx is -1
+    if (refRowIdx === -1) {
+      refRowIdx = refSheet.getLastRow() + 1;
+      refSheet.getRange(refRowIdx, mMap.dynamicKey + 1).setValue(pName);
+    }
+    
+    var row = refSheet.getRange(refRowIdx, 1, 1, refSheet.getLastColumn()).getValues()[0];
+    var c1MinRaw = row[mMap.c1Min];
+    var isSeeded = c1MinRaw !== "" && c1MinRaw !== null && !isNaN(parseFloat(c1MinRaw));
+    
+    var c1Vals = [], r1Vals = [], c2Vals = [], r2Vals = [];
+    var s1Vals = [], s2Vals = [], s3Vals = [];
+    var sl1Vals = [], la1Vals = [], sl2Vals = [];
+    
+    for (var s = 0; s < pool.length; s++) {
+      var d = pool[s];
+      c1Vals.push(parseFloat(d[hMap.comp1]) || 0);
+      r1Vals.push(Math.abs(parseFloat(d[hMap.reb1])) || 0);
+      c2Vals.push(parseFloat(d[hMap.comp2]) || 0);
+      r2Vals.push(Math.abs(parseFloat(d[hMap.reb2])) || 0);
+      
+      if (!isNaN(parseFloat(d[hMap.slope1]))) sl1Vals.push(parseFloat(d[hMap.slope1]));
+      if (!isNaN(parseFloat(d[hMap.loopArea1]))) la1Vals.push(parseFloat(d[hMap.loopArea1]));
+      if (!isNaN(parseFloat(d[hMap.slope2]))) sl2Vals.push(parseFloat(d[hMap.slope2]));
+
+      var sp1 = snapToNominalSpeed(d[hMap.speed1]);
+      var sp2 = snapToNominalSpeed(d[hMap.speed2]);
+      var sp3 = snapToNominalSpeed(d[hMap.speed3]);
+      
+      if (sp1 > 0) s1Vals.push(sp1);
+      if (sp2 > 0) s2Vals.push(sp2);
+      if (sp3 > 0) s3Vals.push(sp3);
+    }
+    
+    var rawSp1 = s1Vals.length > 0 ? mean(s1Vals) : 100;
+    var rawSp2 = s2Vals.length > 0 ? mean(s2Vals) : 400;
+    var rawSp3 = s3Vals.length > 0 ? mean(s3Vals) : 1000;
+    
+    var snappedSp1 = snapToNominalSpeed(rawSp1);
+    var snappedSp2 = snapToNominalSpeed(rawSp2);
+    var snappedSp3 = snapToNominalSpeed(rawSp3);
+    
+    if (snappedSp1 <= 100 || snappedSp3 <= 1000) {
+      snappedSp1 = 100; snappedSp2 = 400; snappedSp3 = 1000;
+    } else {
+      snappedSp1 = 500; snappedSp2 = 1000; snappedSp3 = 2500;
+    }
+    
+    if (mMap.speed1 !== undefined) refSheet.getRange(refRowIdx, mMap.speed1 + 1).setValue(snappedSp1);
+    if (mMap.speed2 !== undefined) refSheet.getRange(refRowIdx, mMap.speed2 + 1).setValue(snappedSp2);
+    if (mMap.speed3 !== undefined) refSheet.getRange(refRowIdx, mMap.speed3 + 1).setValue(snappedSp3);
+    
+    for (var s = 0; s < pool.length; s++) {
+      var d = pool[s];
+      var rIdx = d._rowIdx;
+      if (rIdx) {
+        if (d[hMap.speed1] !== snappedSp1) logSheet.getRange(rIdx, hMap.speed1 + 1).setValue(snappedSp1);
+        if (d[hMap.speed2] !== snappedSp2) logSheet.getRange(rIdx, hMap.speed2 + 1).setValue(snappedSp2);
+        if (d[hMap.speed3] !== snappedSp3) logSheet.getRange(rIdx, hMap.speed3 + 1).setValue(snappedSp3);
+      }
+    }
+    
+    var c1M = mean(c1Vals), c1S = sd(c1Vals, c1M);
+    var r1M = mean(r1Vals), r1S = sd(r1Vals, r1M);
+    var c2M = mean(c2Vals), c2S = sd(c2Vals, c2M);
+    var r2M = mean(r2Vals), r2S = sd(r2Vals, r2M);
+
+    if (!isSeeded) {
+      if (mMap.c1Mean !== undefined) refSheet.getRange(refRowIdx, mMap.c1Mean + 1).setValue(parseFloat(c1M.toFixed(1)));
+      if (mMap.c1SD !== undefined) refSheet.getRange(refRowIdx, mMap.c1SD + 1).setValue(parseFloat(c1S.toFixed(2)));
+      if (mMap.r1Mean !== undefined) refSheet.getRange(refRowIdx, mMap.r1Mean + 1).setValue(parseFloat(r1M.toFixed(1)));
+      if (mMap.r1SD !== undefined) refSheet.getRange(refRowIdx, mMap.r1SD + 1).setValue(parseFloat(r1S.toFixed(2)));
+      if (mMap.c2Mean !== undefined) refSheet.getRange(refRowIdx, mMap.c2Mean + 1).setValue(parseFloat(c2M.toFixed(1)));
+      if (mMap.c2SD !== undefined) refSheet.getRange(refRowIdx, mMap.c2SD + 1).setValue(parseFloat(c2S.toFixed(2)));
+      if (mMap.r2Mean !== undefined) refSheet.getRange(refRowIdx, mMap.r2Mean + 1).setValue(parseFloat(r2M.toFixed(1)));
+      if (mMap.r2SD !== undefined) refSheet.getRange(refRowIdx, mMap.r2SD + 1).setValue(parseFloat(r2S.toFixed(2)));
+      
+      if (countN > 2) {
+        if (mMap.c1Min !== undefined) refSheet.getRange(refRowIdx, mMap.c1Min + 1).setValue(Math.max(0, parseFloat((c1M - 3*c1S).toFixed(1))));
+        if (mMap.c1Max !== undefined) refSheet.getRange(refRowIdx, mMap.c1Max + 1).setValue(parseFloat((c1M + 3*c1S).toFixed(1)));
+        if (mMap.r1Min !== undefined) refSheet.getRange(refRowIdx, mMap.r1Min + 1).setValue(Math.max(0, parseFloat((r1M - 3*r1S).toFixed(1))));
+        if (mMap.r1Max !== undefined) refSheet.getRange(refRowIdx, mMap.r1Max + 1).setValue(parseFloat((r1M + 3*r1S).toFixed(1)));
+        if (mMap.c2Min !== undefined) refSheet.getRange(refRowIdx, mMap.c2Min + 1).setValue(Math.max(0, parseFloat((c2M - 3*c2S).toFixed(1))));
+        if (mMap.c2Max !== undefined) refSheet.getRange(refRowIdx, mMap.c2Max + 1).setValue(parseFloat((c2M + 3*c2S).toFixed(1)));
+        if (mMap.r2Min !== undefined) refSheet.getRange(refRowIdx, mMap.r2Min + 1).setValue(Math.max(0, parseFloat((r2M - 3*r2S).toFixed(1))));
+        if (mMap.r2Max !== undefined) refSheet.getRange(refRowIdx, mMap.r2Max + 1).setValue(parseFloat((r2M + 3*r2S).toFixed(1)));
+      }
+    }
+
+    if (sl1Vals.length > 0 && mMap.slope1Min !== undefined) refSheet.getRange(refRowIdx, mMap.slope1Min + 1).setValue(parseFloat(Math.min.apply(null, sl1Vals).toFixed(1)));
+    if (la1Vals.length > 0 && mMap.loopArea1Min !== undefined) refSheet.getRange(refRowIdx, mMap.loopArea1Min + 1).setValue(parseFloat(Math.min.apply(null, la1Vals).toFixed(1)));
+    if (sl2Vals.length > 0 && mMap.slope2Min !== undefined) refSheet.getRange(refRowIdx, mMap.slope2Min + 1).setValue(parseFloat(Math.min.apply(null, sl2Vals).toFixed(1)));
+
+    var origComp = parseFloat(row[mMap.origCompBase]);
+    if (isNaN(origComp) || origComp === 0) {
+      origComp = c1M;
+      if (mMap.origCompBase !== undefined) refSheet.getRange(refRowIdx, mMap.origCompBase + 1).setValue(parseFloat(origComp.toFixed(1)));
+    }
+
+    var origReb = parseFloat(row[mMap.origRebBase]);
+    if (isNaN(origReb) || origReb === 0) {
+      origReb = r1M;
+      if (mMap.origRebBase !== undefined) refSheet.getRange(refRowIdx, mMap.origRebBase + 1).setValue(parseFloat(origReb.toFixed(1)));
+    }
+
+    if (mMap.rawCompSD !== undefined) refSheet.getRange(refRowIdx, mMap.rawCompSD + 1).setValue(parseFloat(c1S.toFixed(2)));
+    if (mMap.rawRebSD !== undefined) refSheet.getRange(refRowIdx, mMap.rawRebSD + 1).setValue(parseFloat(r1S.toFixed(2)));
+
+    var cMin = parseFloat(row[mMap.c1Min]), cMax = parseFloat(row[mMap.c1Max]);
+    var rMin = parseFloat(row[mMap.r1Min]), rMax = parseFloat(row[mMap.r1Max]);
+    var cWidth = (!isNaN(cMin) && !isNaN(cMax)) ? (cMax - cMin) : (6 * c1S);
+    var rWidth = (!isNaN(rMin) && !isNaN(rMax)) ? (rMax - rMin) : (6 * r1S);
+
+    if (mMap.compRangeWidth !== undefined) refSheet.getRange(refRowIdx, mMap.compRangeWidth + 1).setValue(parseFloat(cWidth.toFixed(1)));
+    if (mMap.rebRangeWidth !== undefined) refSheet.getRange(refRowIdx, mMap.rebRangeWidth + 1).setValue(parseFloat(rWidth.toFixed(1)));
+
+    var compDrift = origComp !== 0 ? (((c1M - origComp) / origComp) * 100) : 0;
+    var rebDrift  = origReb !== 0 ? (((r1M - origReb) / origReb) * 100) : 0;
+
+    if (mMap.compDriftPct !== undefined) refSheet.getRange(refRowIdx, mMap.compDriftPct + 1).setValue(parseFloat(compDrift.toFixed(2)));
+    if (mMap.rebDriftPct !== undefined) refSheet.getRange(refRowIdx, mMap.rebDriftPct + 1).setValue(parseFloat(rebDrift.toFixed(2)));
+    
+    var maxDrift = Math.max(Math.abs(compDrift), Math.abs(rebDrift));
+    var procHealth = "";
+    if (maxDrift > 10) {
+      procHealth = "🔴 WARNING: UNACCEPTABLE DRIFT (" + maxDrift.toFixed(1) + "%)";
+    } else if (isSeeded) {
+      procHealth = "🟢 Stage 0: SEEDED BLUEPRINT ACTIVE (3σ)";
+    } else if (countN >= 100) {
+      procHealth = "🟢 Stage 4: MATURE SPC LOCKED (3σ)";
+    } else {
+      procHealth = "🟡 Stage 1: BUILDING BASELINE (" + countN + " samples)";
+    }
+    if (mMap.healthStamp !== undefined) refSheet.getRange(refRowIdx, mMap.healthStamp + 1).setValue(procHealth);
+
+    var controlModeText = "MANUAL GRACE LIMITS LOADED";
+    if (countN >= 10 && !isSeeded) {
+      controlModeText = "AUTOMATED STATISTICAL SPC LAYER ACTIVE";
+    } else if (countN >= 10 && isSeeded) {
+      controlModeText = "HYBRID: SEEDED BLUEPRINT WITH ACTIVE SPC";
+    }
+    if (mMap.controlMode !== undefined) refSheet.getRange(refRowIdx, mMap.controlMode + 1).setValue(controlModeText);
+
+    if (mMap.sampleCount !== undefined) refSheet.getRange(refRowIdx, mMap.sampleCount + 1).setValue(countN);
+  }
+
   SpreadsheetApp.flush();
 }
