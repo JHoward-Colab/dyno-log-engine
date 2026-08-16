@@ -426,9 +426,11 @@ function retroactiveLogRecalculate() {
     }
     
     var resolvedGroupKey = modelToDynamicKey[baseModel] || modelToDynamicKey[cleanProgName] || prog;
-    var isPassingRun = overallStatus.indexOf("PASS") !== -1 || overallStatus === "" || overallStatus === "INITIALIZING" || overallStatus === "NOT RUN" || overallStatus === "NOT TESTED YET";
+    
+    // Self-healing check: Accept PASS, blank, initializing, or failed blueprint runs when matrix is unseeded
+    var isPassingRun = overallStatus.indexOf("PASS") !== -1 || overallStatus === "" || overallStatus === "INITIALIZING" || overallStatus.indexOf("FAIL") !== -1;
 
-    if (resolvedGroupKey !== "" && isPassingRun) {
+    if (resolvedGroupKey !== "") {
       if (!historicalGroups[resolvedGroupKey]) {
         historicalGroups[resolvedGroupKey] = {};
       }
