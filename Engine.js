@@ -401,7 +401,6 @@ function retroactiveLogRecalculate() {
   }
 
   // STEP 1: Direct Matrix-Driven Baseline Recalculation
-  // Loop ONLY over Part_Reference_Matrix rows and compile all matching dyno runs under that DYNAMIC_KEY
   for (var mx = 1; mx < refData.length; mx++) {
     var matrixKey = String(refData[mx][mMap.dynamicKey] || "").trim();
     if (!matrixKey) continue;
@@ -415,11 +414,9 @@ function retroactiveLogRecalculate() {
       var cLogProg = cleanStr(logProg);
       var cLogBase = cleanStr(logBaseModel);
 
-      // Resolve the master DYNAMIC_KEY for this dyno row
       var resolvedKey = modelToDynamicKey[cLogBase] || modelToDynamicKey[cLogProg] || logProg;
       var cResolvedKey = cleanStr(resolvedKey);
 
-      // Compile under this matrix row ONLY if resolvedKey matches matrixKey
       if (cResolvedKey === cMatrixKey || cLogProg === cMatrixKey || cLogBase === cMatrixKey) {
         logData[r]._rowIdx = r + 1;
         pool.push(logData[r]);
@@ -499,16 +496,28 @@ function retroactiveLogRecalculate() {
       if (mMap.c2SD !== undefined) refSheet.getRange(refRowIdx, mMap.c2SD + 1).setValue(parseFloat(c2S.toFixed(2)));
       if (mMap.r2Mean !== undefined) refSheet.getRange(refRowIdx, mMap.r2Mean + 1).setValue(parseFloat(r2M.toFixed(1)));
       if (mMap.r2SD !== undefined) refSheet.getRange(refRowIdx, mMap.r2SD + 1).setValue(parseFloat(r2S.toFixed(2)));
-
+      
       if (countN > 2) {
-        if (mMap.c1Min !== undefined) refSheet.getRange(refRowIdx, mMap.c1Min + 1).setValue(Math.max(0, parseFloat((c1M - 3*c1S).toFixed(1))));
-        if (mMap.c1Max !== undefined) refSheet.getRange(refRowIdx, mMap.c1Max + 1).setValue(parseFloat((c1M + 3*c1S).toFixed(1)));
-        if (mMap.r1Min !== undefined) refSheet.getRange(refRowIdx, mMap.r1Min + 1).setValue(Math.max(0, parseFloat((r1M - 3*r1S).toFixed(1))));
-        if (mMap.r1Max !== undefined) refSheet.getRange(refRowIdx, mMap.r1Max + 1).setValue(parseFloat((r1M + 3*r1S).toFixed(1)));
-        if (mMap.c2Min !== undefined) refSheet.getRange(refRowIdx, mMap.c2Min + 1).setValue(Math.max(0, parseFloat((c2M - 3*c2S).toFixed(1))));
-        if (mMap.c2Max !== undefined) refSheet.getRange(refRowIdx, mMap.c2Max + 1).setValue(parseFloat((c2M + 3*c2S).toFixed(1)));
-        if (mMap.r2Min !== undefined) refSheet.getRange(refRowIdx, mMap.r2Min + 1).setValue(Math.max(0, parseFloat((r2M - 3*r2S).toFixed(1))));
-        if (mMap.r2Max !== undefined) refSheet.getRange(refRowIdx, mMap.r2Max + 1).setValue(parseFloat((r2M + 3*r2S).toFixed(1)));
+        // Enforce 80% Mean Floor Guardrail (prevents minimum limits from dropping to zero)
+        var c1MinCalc = Math.max(parseFloat((c1M * 0.80).toFixed(1)), parseFloat((c1M - 3*c1S).toFixed(1)));
+        var c1MaxCalc = parseFloat((c1M + 3*c1S).toFixed(1));
+        var r1MinCalc = Math.max(parseFloat((r1M * 0.80).toFixed(1)), parseFloat((r1M - 3*r1S).toFixed(1)));
+        var r1MaxCalc = parseFloat((r1M + 3*r1S).toFixed(1));
+
+        var c2MinCalc = Math.max(parseFloat((c2M * 0.80).toFixed(1)), parseFloat((c2M - 3*c2S).toFixed(1)));
+        var c2MaxCalc = parseFloat((c2M + 3*c2S).toFixed(1));
+        var r2MinCalc = Math.max(parseFloat((r2M * 0.80).toFixed(1)), parseFloat((r2M - 3*r2S).toFixed(1)));
+        var r2MaxCalc = parseFloat((r2M + 3*r2S).toFixed(1));
+
+        if (mMap.c1Min !== undefined) refSheet.getRange(refRowIdx, mMap.c1Min + 1).setValue(c1MinCalc);
+        if (mMap.c1Max !== undefined) refSheet.getRange(refRowIdx, mMap.c1Max + 1).setValue(c1MaxCalc);
+        if (mMap.r1Min !== undefined) refSheet.getRange(refRowIdx, mMap.r1Min + 1).setValue(r1MinCalc);
+        if (mMap.r1Max !== undefined) refSheet.getRange(refRowIdx, mMap.r1Max + 1).setValue(r1MaxCalc);
+
+        if (mMap.c2Min !== undefined) refSheet.getRange(refRowIdx, mMap.c2Min + 1).setValue(c2MinCalc);
+        if (mMap.c2Max !== undefined) refSheet.getRange(refRowIdx, mMap.c2Max + 1).setValue(c2MaxCalc);
+        if (mMap.r2Min !== undefined) refSheet.getRange(refRowIdx, mMap.r2Min + 1).setValue(r2MinCalc);
+        if (mMap.r2Max !== undefined) refSheet.getRange(refRowIdx, mMap.r2Max + 1).setValue(r2MaxCalc);
       }
     }
 
