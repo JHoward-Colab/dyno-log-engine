@@ -4,6 +4,31 @@
 // =========================================================================
 
 /**
+ * Safely extracts 4-digit/6-digit WO batch number from barcodes, short serials, or file names.
+ * e.g., "43081008001979001" -> 1979
+ * e.g., "001979-001"        -> 1979
+ * e.g., "001979"            -> 1979
+ */
+function extractWoBatchNum(strVal) {
+  var s = String(strVal || "").trim();
+  if (!s) return 0;
+
+  if (s.indexOf("-") !== -1) {
+    s = s.split("-")[0];
+  }
+
+  var clean = s.replace(/[^0-9]/g, "");
+  if (!clean) return 0;
+
+  if (clean.length >= 10) {
+    var batchPart = clean.slice(-7, -3);
+    return parseInt(batchPart, 10) || 0;
+  }
+
+  return parseInt(clean, 10) || 0;
+}
+
+/**
  * Rebuilds the Summary Dashboard tab from Work Order Drive files and Master_Dyno_Log.
  */
 function buildSummaryDashboard() {
@@ -31,7 +56,7 @@ function buildSummaryDashboard() {
   var logCols = CONFIG.COLUMNS.MASTER_DYNO_LOG || {};
   var sumCols = CONFIG.COLUMNS.SUMMARY || {};
 
-  // STEP 1: Determine Earliest Work Order Number in Master_Dyno_Log
+  // STEP 1: Determine Lowest Active WO Number in Master_Dyno_Log and Index Serials
   var minWoNumber = 999999;
   var logMapByCleanSerial = {};
   var logSerialsList = [];
@@ -43,22 +68,18 @@ function buildSummaryDashboard() {
       logMapByCleanSerial[cSer] = logData[r];
       logSerialsList.push({ clean: cSer, raw: rawSerial, row: logData[r] });
 
-      // Extract batch digits (e.g. "1979" from "001979-001" or "1979-001")
-      var batchMatch = rawSerial.match(/(\d+)-/);
-      if (batchMatch) {
-        var woNum = parseInt(batchMatch[1], 10);
-        if (!isNaN(woNum) && woNum < minWoNumber) {
-          minWoNumber = woNum;
-        }
+      var woNum = extractWoBatchNum(rawSerial);
+      if (woNum > 0 && woNum < minWoNumber) {
+        minWoNumber = woNum;
       }
     }
   }
 
-  // Fallback cutoff if log is empty
   if (minWoNumber === 999999) minWoNumber = 0;
 
   // STEP 2: Query Drive Files
   var files = folder.searchFiles("mimeType = '" + MimeType.GOOGLE_SHEETS + "' and trashed = false");
+  var cache = CacheService.getScriptCache();
 
   var tableOutput = [];
   var bgColors = [];
@@ -67,35 +88,56 @@ function buildSummaryDashboard() {
 
   while (files.hasNext()) {
     var file = files.next();
+    var fileId = file.getId();
     var fileName = file.getName();
     var woNumber = fileName.replace(/\.[^/.]+$/, "").trim();
 
-    // STEP 3: Instant Suffix Cutoff Check (Skip legacy files without opening)
-    var fileWoMatch = woNumber.match(/(\d+)/);
-    if (fileWoMatch) {
-      var fileWoNum = parseInt(fileWoMatch[1], 10);
-      if (!isNaN(fileWoNum) && fileWoNum < minWoNumber) {
-        continue; // Skip legacy file instantly
-      }
+    // STEP 3: Instant Cutoff Check (Skip legacy files without opening)
+    var fileWoNum = extractWoBatchNum(fileName);
+    if (fileWoNum > 0 && minWoNumber > 0 && fileWoNum < minWoNumber) {
+      continue; // Skip legacy file in 0ms
     }
 
     try {
-      var woSs = SpreadsheetApp.openById(file.getId());
-      var woSheet = woSs.getSheets()[0];
-
-      var baseModel = String(woSheet.getRange("D3").getValue()).trim();
-      var bomRev = String(woSheet.getRange("D4").getValue()).trim();
-
-      var woLastRow = woSheet.getLastRow();
+      var baseModel = "";
+      var bomRev = "";
       var expectedSerials = [];
-      if (woLastRow >= 12) {
-        var rawSerials = woSheet.getRange(12, 1, woLastRow - 11, 1).getValues();
-        for (var s = 0; s < rawSerials.length; s++) {
-          var sVal = String(rawSerials[s][0] || "").trim();
-          if (sVal && sVal.toLowerCase() !== "undefined" && sVal.toLowerCase() !== "null") {
-            expectedSerials.push(sVal);
+
+      // STEP 4: High-Speed Cache Lookup for File Metadata
+      var cacheKey = "WO_META_" + fileId;
+      var cachedJson = cache.get(cacheKey);
+
+      if (cachedJson) {
+        var cachedData = JSON.parse(cachedJson);
+        baseModel = cachedData.baseModel;
+        bomRev = cachedData.bomRev;
+        expectedSerials = cachedData.expectedSerials;
+      } else {
+        // Open file once on cache miss and save to Cache
+        var woSs = SpreadsheetApp.openById(fileId);
+        var woSheet = woSs.getSheets()[0];
+
+        baseModel = String(woSheet.getRange("D3").getValue()).trim();
+        bomRev = String(woSheet.getRange("D4").getValue()).trim();
+
+        var woLastRow = woSheet.getLastRow();
+        if (woLastRow >= 12) {
+          var rawSerials = woSheet.getRange(12, 1, woLastRow - 11, 1).getValues();
+          for (var s = 0; s < rawSerials.length; s++) {
+            var sVal = String(rawSerials[s][0] || "").trim();
+            if (sVal && sVal.toLowerCase() !== "undefined" && sVal.toLowerCase() !== "null") {
+              expectedSerials.push(sVal);
+            }
           }
         }
+
+        // Cache metadata for 6 hours (21,600 seconds)
+        var cachePayload = {
+          baseModel: baseModel,
+          bomRev: bomRev,
+          expectedSerials: expectedSerials
+        };
+        cache.put(cacheKey, JSON.stringify(cachePayload), 21600);
       }
 
       var totalQty = expectedSerials.length;
@@ -222,7 +264,7 @@ function buildSummaryDashboard() {
     targetRange.setFontColors(fontColors);
     targetRange.setFontWeights(fontWeights);
   } else {
-    summarySheet.getRange("A2").setValue("⚠️ No Work Order files matched starting threshold (WO >= " + minWoNumber + ").");
+    summarySheet.getRange("A2").setValue("⚠️ No Work Orders matched starting threshold (WO >= " + minWoNumber + ").");
   }
 }
 
