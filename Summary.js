@@ -37,6 +37,7 @@ function robustExtractWoBatchNum(strVal) {
  * Rebuilds the Summary Dashboard tab from Work Order Drive files and Master_Dyno_Log.
  */
 function buildSummaryDashboard() {
+  var startTime = new Date().getTime();
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var summarySheet = ss.getSheetByName(CONFIG.SHEET_NAMES.SUMMARY);
   var logSheet = ss.getSheetByName(CONFIG.SHEET_NAMES.MASTER_DYNO_LOG);
@@ -82,7 +83,7 @@ function buildSummaryDashboard() {
 
   if (minWoNumber === 999999) minWoNumber = 0;
 
-  // STEP 2: Collect & Filter Files
+  // STEP 2: Collect & Filter Files Instantly (Zero Drive Metadata Calls)
   var filesIterator = folder.searchFiles("mimeType = '" + MimeType.GOOGLE_SHEETS + "' and trashed = false");
   var fileList = [];
 
@@ -99,8 +100,7 @@ function buildSummaryDashboard() {
       file: f,
       id: f.getId(),
       name: fName,
-      woNum: fWoNum,
-      lastUpdated: f.getLastUpdated().getTime()
+      woNum: fWoNum
     });
   }
 
@@ -114,15 +114,20 @@ function buildSummaryDashboard() {
 
   var props = PropertiesService.getScriptProperties();
   var uncachedOpenedCount = 0;
-  var MAX_UNCACHED_OPENS = 12; // Hard cap per execution to keep run time < 5s
+  var MAX_UNCACHED_OPENS = 5; // Opens max 5 new files per execution run
 
   var tableOutput = [];
   var bgColors = [];
   var fontColors = [];
   var fontWeights = [];
 
-  // STEP 4: Process Files using Persistent Storage
+  // STEP 4: Time-Guarded File Processing (15-Second Hard Limit)
   for (var i = 0; i < fileList.length; i++) {
+    if ((new Date().getTime() - startTime) > 15000) {
+      Logger.log("Execution safety guard reached (15s). Rendering " + tableOutput.length + " rows.");
+      break;
+    }
+
     var item = fileList[i];
     var fileId = item.id;
     var fileName = item.name;
@@ -146,7 +151,7 @@ function buildSummaryDashboard() {
         bomRev = cachedData.bomRev;
         expectedSerials = cachedData.expectedSerials || [];
       } else if (uncachedOpenedCount < MAX_UNCACHED_OPENS) {
-        // OPEN UNCACHED FILE (CAPPED AT 4 PER RUN)
+        // OPEN UNCACHED FILE (MAX 5 PER RUN)
         uncachedOpenedCount++;
         var woSs = SpreadsheetApp.openById(fileId);
         var woSheet = woSs.getSheets()[0];
@@ -173,7 +178,7 @@ function buildSummaryDashboard() {
         };
         props.setProperty(propKey, JSON.stringify(cachePayload));
       } else {
-        // OVER CAPACITY FALLBACK: DEFER FILE OPEN TO NEXT RUN
+        // DEFER TO NEXT RUN IF OVER BATCH CAPACITY
         baseModel = "PENDING CACHE";
         bomRev = "-";
       }
