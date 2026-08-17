@@ -4,28 +4,40 @@
 // =========================================================================
 
 /**
- * Safely extracts WO batch number from barcodes, short serials, or file names.
+ * Robustly extracts WO batch number from barcodes, short serials, or file names.
  * e.g., "43081008001979001" -> 1979
  * e.g., "001979-001"        -> 1979
- * e.g., "001979"            -> 1979
+ * e.g., "WO-1979"           -> 1979
+ * e.g., "Work Order 1979"   -> 1979
  */
-function extractWoBatchNum(strVal) {
+function robustExtractWoBatchNum(strVal) {
   var s = String(strVal || "").trim();
   if (!s) return 0;
 
+  var cleanDigits = s.replace(/[^0-9]/g, "");
+  if (!cleanDigits) return 0;
+
+  // 17-digit barcode format (e.g., 43081008001979001)
+  if (cleanDigits.length >= 14) {
+    var batchPart = cleanDigits.slice(-7, -3);
+    var pBatch = parseInt(batchPart, 10);
+    if (!isNaN(pBatch) && pBatch > 0) return pBatch;
+  }
+
+  // Short serial with hyphen (e.g., "001979-001")
   if (s.indexOf("-") !== -1) {
-    s = s.split("-")[0];
+    var prefix = s.split("-")[0];
+    var pDigits = prefix.replace(/[^0-9]/g, "");
+    if (pDigits) return parseInt(pDigits, 10) || 0;
   }
 
-  var clean = s.replace(/[^0-9]/g, "");
-  if (!clean) return 0;
-
-  if (clean.length >= 10) {
-    var batchPart = clean.slice(-7, -3);
-    return parseInt(batchPart, 10) || 0;
+  // Regex lookup for 4 to 6 digit sequence
+  var match = s.match(/\b\d{4,6}\b/) || s.match(/\d{4,6}/);
+  if (match) {
+    return parseInt(match[0], 10) || 0;
   }
 
-  return parseInt(clean, 10) || 0;
+  return parseInt(cleanDigits, 10) || 0;
 }
 
 /**
@@ -69,7 +81,7 @@ function buildSummaryDashboard() {
       logMapByCleanSerial[cSer] = logData[r];
       logSerialsList.push({ clean: cSer, raw: rawSerial, row: logData[r] });
 
-      var woNum = extractWoBatchNum(rawSerial);
+      var woNum = robustExtractWoBatchNum(rawSerial);
       if (woNum > 0 && woNum < minWoNumber) {
         minWoNumber = woNum;
       }
@@ -85,9 +97,9 @@ function buildSummaryDashboard() {
   while (filesIterator.hasNext()) {
     var f = filesIterator.next();
     var fName = f.getName();
-    var fWoNum = extractWoBatchNum(fName);
+    var fWoNum = robustExtractWoBatchNum(fName);
 
-    // Filter out legacy files before baseline WO
+    // Filter out legacy files older than baseline WO threshold
     if (fWoNum > 0 && minWoNumber > 0 && fWoNum < minWoNumber) {
       continue;
     }
@@ -101,7 +113,7 @@ function buildSummaryDashboard() {
     });
   }
 
-  // STEP 3: Sort Files by Work Order Serial Number in Ascending Order (1979, 1980, 1981...)
+  // STEP 3: Sort Files by Work Order Number in Ascending Order (1979, 1980, 1981...)
   fileList.sort(function(a, b) {
     if (a.woNum !== b.woNum && a.woNum > 0 && b.woNum > 0) {
       return a.woNum - b.woNum;
@@ -115,10 +127,10 @@ function buildSummaryDashboard() {
   var fontColors = [];
   var fontWeights = [];
 
-  // STEP 4: Process Sorted Work Orders (Time-Guarded for Max 12 Seconds)
+  // STEP 4: Process Sorted Work Orders (Time-Guarded for 240 Seconds / 4 Minutes)
   for (var i = 0; i < fileList.length; i++) {
-    if ((new Date().getTime() - startTime) > 12000) {
-      Logger.log("Time guard reached (12s). Rendering current " + tableOutput.length + " Work Orders.");
+    if ((new Date().getTime() - startTime) > 240000) {
+      Logger.log("Time guard reached (240s). Rendering current " + tableOutput.length + " Work Orders.");
       break;
     }
 
@@ -127,7 +139,7 @@ function buildSummaryDashboard() {
     var fileName = item.name;
     var woNumber = fileName.replace(/\.[^/.]+$/, "").trim();
 
-    // Construct Direct Google Drive File Hyperlink
+    // Construct Direct Google Drive File Hyperlink Formula
     var fileUrl = "https://docs.google.com/spreadsheets/d/" + fileId + "/edit";
     var woLinkFormula = '=HYPERLINK("' + fileUrl + '", "' + woNumber + '")';
 
@@ -167,7 +179,7 @@ function buildSummaryDashboard() {
           bomRev: bomRev,
           expectedSerials: expectedSerials
         };
-        cache.put(cacheKey, JSON.stringify(cachePayload), 21600);
+        cache.put(cacheKey, JSON.stringify(cachePayload), 21600); // 6-hour cache
       }
 
       var totalQty = expectedSerials.length;
