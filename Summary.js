@@ -27,13 +27,12 @@ function buildSummaryDashboard() {
     return;
   }
 
-  var files = folder.searchFiles("mimeType = '" + MimeType.GOOGLE_SHEETS + "' and trashed = false");
-
   var logData = logSheet.getDataRange().getValues();
   var logCols = CONFIG.COLUMNS.MASTER_DYNO_LOG || {};
   var sumCols = CONFIG.COLUMNS.SUMMARY || {};
 
-  // OPTIMIZATION: Index Master_Dyno_Log into Hash Map ONCE for O(1) instant lookups
+  // STEP 1: Determine Earliest Work Order Number in Master_Dyno_Log
+  var minWoNumber = 999999;
   var logMapByCleanSerial = {};
   var logSerialsList = [];
 
@@ -43,8 +42,23 @@ function buildSummaryDashboard() {
       var cSer = cleanKey(rawSerial);
       logMapByCleanSerial[cSer] = logData[r];
       logSerialsList.push({ clean: cSer, raw: rawSerial, row: logData[r] });
+
+      // Extract batch digits (e.g. "1979" from "001979-001" or "1979-001")
+      var batchMatch = rawSerial.match(/(\d+)-/);
+      if (batchMatch) {
+        var woNum = parseInt(batchMatch[1], 10);
+        if (!isNaN(woNum) && woNum < minWoNumber) {
+          minWoNumber = woNum;
+        }
+      }
     }
   }
+
+  // Fallback cutoff if log is empty
+  if (minWoNumber === 999999) minWoNumber = 0;
+
+  // STEP 2: Query Drive Files
+  var files = folder.searchFiles("mimeType = '" + MimeType.GOOGLE_SHEETS + "' and trashed = false");
 
   var tableOutput = [];
   var bgColors = [];
@@ -54,12 +68,21 @@ function buildSummaryDashboard() {
   while (files.hasNext()) {
     var file = files.next();
     var fileName = file.getName();
+    var woNumber = fileName.replace(/\.[^/.]+$/, "").trim();
+
+    // STEP 3: Instant Suffix Cutoff Check (Skip legacy files without opening)
+    var fileWoMatch = woNumber.match(/(\d+)/);
+    if (fileWoMatch) {
+      var fileWoNum = parseInt(fileWoMatch[1], 10);
+      if (!isNaN(fileWoNum) && fileWoNum < minWoNumber) {
+        continue; // Skip legacy file instantly
+      }
+    }
 
     try {
       var woSs = SpreadsheetApp.openById(file.getId());
       var woSheet = woSs.getSheets()[0];
 
-      var woNumber = fileName.replace(/\.[^/.]+$/, "").trim();
       var baseModel = String(woSheet.getRange("D3").getValue()).trim();
       var bomRev = String(woSheet.getRange("D4").getValue()).trim();
 
@@ -88,11 +111,9 @@ function buildSummaryDashboard() {
         var matchedRun = null;
         var cleanExp = cleanKey(expS);
 
-        // Fast Direct Lookup
         if (logMapByCleanSerial[cleanExp]) {
           matchedRun = logMapByCleanSerial[cleanExp];
         } else {
-          // Suffix Fuzzy Lookup
           for (var lIdx = 0; lIdx < logSerialsList.length; lIdx++) {
             if (isSerialMatch(expS, logSerialsList[lIdx].raw)) {
               matchedRun = logSerialsList[lIdx].row;
@@ -201,7 +222,7 @@ function buildSummaryDashboard() {
     targetRange.setFontColors(fontColors);
     targetRange.setFontWeights(fontWeights);
   } else {
-    summarySheet.getRange("A2").setValue("⚠️ No Google Sheets Work Order files found in Drive folder.");
+    summarySheet.getRange("A2").setValue("⚠️ No Work Order files matched starting threshold (WO >= " + minWoNumber + ").");
   }
 }
 
