@@ -1,6 +1,6 @@
 // =========================================================================
 // 📊 SUMMARY DASHBOARD CONTROLLER (Summary.js)
-// Bulletproof Time-Guarded Engine with Instant Property Persistence
+// Smart-Targeted Incremental Indexer & Interactive Navigator
 // =========================================================================
 
 function robustExtractWoBatchNum(strVal) {
@@ -27,13 +27,90 @@ function robustExtractWoBatchNum(strVal) {
 }
 
 /**
- * Rebuilds the Summary Dashboard tab with an 8-second execution wall-clock guard.
+ * Dedicated One-Click Indexer: Scans Drive and caches ALL remaining uncached Work Orders.
+ */
+function runFullSystemIndexer() {
+  var folderId = CONFIG.FOLDERS.WORK_ORDER_FOLDER_ID;
+  if (!folderId) {
+    Logger.log("❌ Error: WORK_ORDER_FOLDER_ID not set.");
+    return;
+  }
+
+  var folder = DriveApp.getFolderById(folderId);
+  var BASELINE_WO_FLOOR = 1608;
+
+  var propsService = PropertiesService.getScriptProperties();
+  var allProps = propsService.getProperties();
+
+  var filesIterator = folder.getFiles();
+  var uncachedList = [];
+
+  while (filesIterator.hasNext()) {
+    var f = filesIterator.next();
+    var fName = f.getName();
+    if (fName.indexOf(".xlsx") !== -1 && fName.indexOf("~") === 0) continue;
+
+    var fWoNum = robustExtractWoBatchNum(fName);
+    if (fWoNum > 0 && fWoNum < BASELINE_WO_FLOOR) continue;
+
+    var propKey = "WO_META_" + f.getId();
+    if (!allProps[propKey]) {
+      uncachedList.push({ id: f.getId(), name: fName });
+    }
+  }
+
+  Logger.log("Found " + uncachedList.length + " uncached Work Orders needing indexing.");
+
+  if (uncachedList.length === 0) {
+    Logger.log("✅ All Work Orders are already 100% indexed! Refreshing dashboard...");
+    buildSummaryDashboard();
+    return;
+  }
+
+  // Index uncached files in safe 5-file batches
+  for (var i = 0; i < uncachedList.length; i++) {
+    var item = uncachedList[i];
+    try {
+      var woSs = SpreadsheetApp.openById(item.id);
+      var woSheet = woSs.getSheets()[0];
+
+      var baseModel = String(woSheet.getRange("D3").getValue()).trim();
+      var bomRev = String(woSheet.getRange("D4").getValue()).trim();
+      var expectedSerials = [];
+
+      var woLastRow = woSheet.getLastRow();
+      if (woLastRow >= 12) {
+        var raw = woSheet.getRange(12, 1, woLastRow - 11, 1).getValues();
+        for (var s = 0; s < raw.length; s++) {
+          var v = String(raw[s][0] || "").trim();
+          if (v && v.toLowerCase() !== "undefined" && v.toLowerCase() !== "null") {
+            expectedSerials.push(v);
+          }
+        }
+      }
+
+      var payloadStr = JSON.stringify({ bm: baseModel, br: bomRev, es: expectedSerials });
+      propsService.setProperty("WO_META_" + item.id, payloadStr);
+      Logger.log("Indexed (" + (i + 1) + "/" + uncachedList.length + "): " + item.name);
+
+    } catch (err) {
+      Logger.log("Failed to index " + item.name + ": " + err.toString());
+    }
+
+    // Brief pause every 5 files to avoid Google network throttle
+    if ((i + 1) % 5 === 0) {
+      Utilities.sleep(500);
+    }
+  }
+
+  Logger.log("🎉 Indexing 100% complete! Rendering final Summary Dashboard...");
+  buildSummaryDashboard();
+}
+
+/**
+ * Builds the Summary Dashboard tab from cached metadata and Master_Dyno_Log.
  */
 function buildSummaryDashboard() {
-  var startTime = new Date().getTime();
-  var MAX_EXECUTION_TIME_MS = 8000; // Hard cutoff at 8 seconds
-  var MAX_NEW_OPENS_PER_RUN = 3;    // Maximum uncached files opened per sync
-
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var summarySheet = ss.getSheetByName(CONFIG.SHEET_NAMES.SUMMARY);
   var logSheet = ss.getSheetByName(CONFIG.SHEET_NAMES.MASTER_DYNO_LOG);
@@ -92,13 +169,12 @@ function buildSummaryDashboard() {
     return (a.woNum !== b.woNum && a.woNum > 0 && b.woNum > 0) ? (a.woNum - b.woNum) : a.name.localeCompare(b.name);
   });
 
-  var uncachedOpenedCount = 0;
   var tableOutput = [];
   var bgColors = [];
   var fontColors = [];
   var fontWeights = [];
 
-  // STEP 5: Process Matrix with Wall-Clock Guard
+  // STEP 5: Process Matrix
   for (var i = 0; i < fileList.length; i++) {
     var item = fileList[i];
     var fileId = item.id;
@@ -116,50 +192,13 @@ function buildSummaryDashboard() {
     var cachedStr = allProps[propKey];
 
     if (cachedStr) {
-      // INSTANT 0ms LOAD FROM PERSISTENT STORAGE
       var cachedData = JSON.parse(cachedStr);
       baseModel = cachedData.bm || "";
       bomRev = cachedData.br || "";
       expectedSerials = cachedData.es || [];
     } else {
-      var elapsedTime = new Date().getTime() - startTime;
-
-      // TIME & BATCH GUARD: Check if safe to open uncached file
-      if (elapsedTime < MAX_EXECUTION_TIME_MS && uncachedOpenedCount < MAX_NEW_OPENS_PER_RUN) {
-        uncachedOpenedCount++;
-        try {
-          var woSs = SpreadsheetApp.openById(fileId);
-          var woSheet = woSs.getSheets()[0];
-
-          baseModel = String(woSheet.getRange("D3").getValue()).trim();
-          bomRev = String(woSheet.getRange("D4").getValue()).trim();
-
-          var woLastRow = woSheet.getLastRow();
-          if (woLastRow >= 12) {
-            var raw = woSheet.getRange(12, 1, woLastRow - 11, 1).getValues();
-            for (var s = 0; s < raw.length; s++) {
-              var v = String(raw[s][0] || "").trim();
-              if (v && v.toLowerCase() !== "undefined" && v.toLowerCase() !== "null") {
-                expectedSerials.push(v);
-              }
-            }
-          }
-
-          // SAVE IMMEDIATELY TO PERSISTENT STORAGE TO PREVENT LOSS ON CANCEL
-          var payloadStr = JSON.stringify({ bm: baseModel, br: bomRev, es: expectedSerials });
-          propsService.setProperty(propKey, payloadStr);
-          allProps[propKey] = payloadStr;
-
-        } catch (openErr) {
-          Logger.log("Error opening WO file " + fileName + ": " + openErr.toString());
-          baseModel = "ERROR";
-          bomRev = "-";
-        }
-      } else {
-        // OVER TIME/BATCH LIMIT -> DEFER TO NEXT BACKGROUND RUN
-        baseModel = "PENDING CACHE";
-        bomRev = "-";
-      }
+      baseModel = "PENDING CACHE";
+      bomRev = "-";
     }
 
     var totalQty = expectedSerials.length;
@@ -242,7 +281,7 @@ function buildSummaryDashboard() {
     fontWeights.push(["bold", "bold", "normal", "normal", "normal", "normal", "normal", "normal"]);
   }
 
-  // STEP 6: Single Bulk Output to Summary Sheet
+  // STEP 6: Render Sheet
   var maxRows = Math.max(summarySheet.getLastRow() - 1, 1);
   summarySheet.getRange(2, 1, maxRows, 8).clearContent().setBackground(null).setFontColor(null).setFontWeight("normal");
 
@@ -253,18 +292,6 @@ function buildSummaryDashboard() {
     targetRange.setFontColors(fontColors);
     targetRange.setFontWeights(fontWeights);
   }
-}
-
-/**
- * Rapid Indexer: Run this manually in the editor to index all remaining uncached Work Orders.
- */
-function indexAllWorkOrders() {
-  for (var pass = 1; pass <= 15; pass++) {
-    Logger.log("Running Indexer Pass #" + pass + "...");
-    buildSummaryDashboard();
-    Utilities.sleep(1000);
-  }
-  Logger.log("All Work Orders indexed successfully!");
 }
 
 function clearWoSummaryCache() {
