@@ -1,6 +1,6 @@
 // =========================================================================
 // 📊 SUMMARY DASHBOARD CONTROLLER (Summary.js)
-// Ultra-Fast Parallel REST API Engine for Summary Tab Dashboard
+// Rate-Limited Parallel REST API Engine for Summary Tab Dashboard
 // =========================================================================
 
 /**
@@ -34,7 +34,7 @@ function robustExtractWoBatchNum(strVal) {
 }
 
 /**
- * Rebuilds the Summary Dashboard tab instantly using parallel REST requests.
+ * Rebuilds the Summary Dashboard tab instantly using batch-chunked REST requests.
  */
 function buildSummaryDashboard() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -111,7 +111,7 @@ function buildSummaryDashboard() {
     }
   }
 
-  // STEP 4: PARALLEL REST FETCH for Uncached Files
+  // STEP 4: BATCH-CHUNKED PARALLEL REST FETCH (15 Requests per Burst)
   if (uncachedFiles.length > 0) {
     var token;
     try {
@@ -121,60 +121,71 @@ function buildSummaryDashboard() {
       return;
     }
 
-    var requests = [];
-    for (var u = 0; u < uncachedFiles.length; u++) {
-      var fetchUrl = "https://sheets.googleapis.com/v4/spreadsheets/" + uncachedFiles[u].id + "/values:batchGet?ranges=D3%3AD4&ranges=A12%3AA100";
-      requests.push({
-        url: fetchUrl,
-        method: "get",
-        headers: { Authorization: "Bearer " + token },
-        muteHttpExceptions: true
-      });
-    }
+    var CHUNK_SIZE = 15; // Max parallel burst limit
+    var newPropsToSave = {};
 
-    try {
-      var responses = UrlFetchApp.fetchAll(requests);
-      var newPropsToSave = {};
+    for (var c = 0; c < uncachedFiles.length; c += CHUNK_SIZE) {
+      var chunk = uncachedFiles.slice(c, c + CHUNK_SIZE);
+      var requests = [];
 
-      for (var k = 0; k < responses.length; k++) {
-        var uFile = uncachedFiles[k];
-        var propKey = "WO_META_" + uFile.id;
-        var resp = responses[k];
-
-        var bModel = "";
-        var bRev = "";
-        var expSerials = [];
-
-        if (resp.getResponseCode() === 200) {
-          var resData = JSON.parse(resp.getContentText());
-          if (resData.valueRanges && resData.valueRanges.length >= 2) {
-            var d3d4 = resData.valueRanges[0].values || [];
-            bModel = (d3d4[0] && d3d4[0][0]) ? String(d3d4[0][0]).trim() : "";
-            bRev = (d3d4[1] && d3d4[1][0]) ? String(d3d4[1][0]).trim() : "";
-
-            var serialRows = resData.valueRanges[1].values || [];
-            for (var s = 0; s < serialRows.length; s++) {
-              var sVal = (serialRows[s] && serialRows[s][0]) ? String(serialRows[s][0]).trim() : "";
-              if (sVal && sVal.toLowerCase() !== "undefined" && sVal.toLowerCase() !== "null") {
-                expSerials.push(sVal);
-              }
-            }
-          }
-        } else {
-          Logger.log("REST Error for " + uFile.name + ": Code " + resp.getResponseCode() + " - " + resp.getContentText());
-        }
-
-        var payload = JSON.stringify({ bm: bModel, br: bRev, es: expSerials });
-        newPropsToSave[propKey] = payload;
-        allProps[propKey] = payload;
+      for (var u = 0; u < chunk.length; u++) {
+        var fetchUrl = "https://sheets.googleapis.com/v4/spreadsheets/" + chunk[u].id + "/values:batchGet?ranges=D3%3AD4&ranges=A12%3AA100";
+        requests.push({
+          url: fetchUrl,
+          method: "get",
+          headers: { Authorization: "Bearer " + token },
+          muteHttpExceptions: true
+        });
       }
 
-      propsService.setProperties(newPropsToSave, false);
+      try {
+        var responses = UrlFetchApp.fetchAll(requests);
 
-    } catch (err) {
-      summarySheet.getRange("A2").setValue("❌ Fetch Error: " + err.toString());
-      return;
+        for (var k = 0; k < responses.length; k++) {
+          var uFile = chunk[k];
+          var propKey = "WO_META_" + uFile.id;
+          var resp = responses[k];
+
+          var bModel = "";
+          var bRev = "";
+          var expSerials = [];
+
+          if (resp.getResponseCode() === 200) {
+            var resData = JSON.parse(resp.getContentText());
+            if (resData.valueRanges && resData.valueRanges.length >= 2) {
+              var d3d4 = resData.valueRanges[0].values || [];
+              bModel = (d3d4[0] && d3d4[0][0]) ? String(d3d4[0][0]).trim() : "";
+              bRev = (d3d4[1] && d3d4[1][0]) ? String(d3d4[1][0]).trim() : "";
+
+              var serialRows = resData.valueRanges[1].values || [];
+              for (var s = 0; s < serialRows.length; s++) {
+                var sVal = (serialRows[s] && serialRows[s][0]) ? String(serialRows[s][0]).trim() : "";
+                if (sVal && sVal.toLowerCase() !== "undefined" && sVal.toLowerCase() !== "null") {
+                  expSerials.push(sVal);
+                }
+              }
+            }
+          } else {
+            Logger.log("REST Error for " + uFile.name + ": Code " + resp.getResponseCode() + " - " + resp.getContentText());
+          }
+
+          var payload = JSON.stringify({ bm: bModel, br: bRev, es: expSerials });
+          newPropsToSave[propKey] = payload;
+          allProps[propKey] = payload;
+        }
+
+      } catch (err) {
+        summarySheet.getRange("A2").setValue("❌ Fetch Error: " + err.toString());
+        return;
+      }
+
+      // Throttle 1 second between chunks to respect Google UrlFetch rate limits
+      if (c + CHUNK_SIZE < uncachedFiles.length) {
+        Utilities.sleep(1000);
+      }
     }
+
+    propsService.setProperties(newPropsToSave, false);
   }
 
   // STEP 5: Sort Work Orders Ascending
