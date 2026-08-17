@@ -1,11 +1,8 @@
 // =========================================================================
 // 📊 SUMMARY DASHBOARD CONTROLLER (Summary.js)
-// Self-Healing Backlog Indexer & Interactive Dashboard Navigator
+// Registry-Filtered, Self-Healing Backlog Indexer & Dashboard Navigator
 // =========================================================================
 
-/**
- * Robustly extracts WO batch number from barcodes, short serials, or file names.
- */
 function robustExtractWoBatchNum(strVal) {
   var s = String(strVal || "").trim();
   if (!s) return 0;
@@ -29,13 +26,11 @@ function robustExtractWoBatchNum(strVal) {
   return match ? (parseInt(match[0], 10) || 0) : (parseInt(cleanDigits, 10) || 0);
 }
 
-/**
- * Validates whether cached JSON metadata contains real, indexed data.
- */
 function isValidCache(jsonStr) {
   if (!jsonStr) return false;
   try {
     var data = JSON.parse(jsonStr);
+    // "IGNORED_PART" is a valid cached state for kits/service parts
     return data && data.bm && data.bm !== "PENDING CACHE" && data.bm !== "ERROR" && data.bm !== "";
   } catch (e) {
     return false;
@@ -43,23 +38,54 @@ function isValidCache(jsonStr) {
 }
 
 /**
- * One-Click Reset & Full Re-index
- * Flushes invalid/placeholder cache entries and forces clean indexing.
+ * Retrieves valid part numbers from the Program_Registry to filter Work Orders.
+ */
+function getValidRegistryModels(ss) {
+  var validBaseModels = {};
+  var registrySheet = ss.getSheetByName(CONFIG.SHEET_NAMES.PROGRAM_REGISTRY || "Program_Registry");
+  if (!registrySheet) return validBaseModels;
+
+  var regData = registrySheet.getDataRange().getValues();
+  if (regData.length < 2) return validBaseModels;
+
+  // Auto-detect the Part Number/Base Model column
+  var bmColIdx = 0;
+  var headers = regData[0];
+  for (var c = 0; c < headers.length; c++) {
+    var h = String(headers[c]).toUpperCase();
+    if (h.indexOf("BASE") !== -1 || h.indexOf("PART") !== -1 || h.indexOf("MODEL") !== -1) {
+      bmColIdx = c;
+      break;
+    }
+  }
+
+  for (var r = 1; r < regData.length; r++) {
+    var bmVal = String(regData[r][bmColIdx] || "").trim().toUpperCase();
+    if (bmVal) validBaseModels[bmVal] = true;
+  }
+  return validBaseModels;
+}
+
+/**
+ * One-Click Reset & Full Re-index (Clears cache and forces clean Registry-filtered indexing)
  */
 function resetAndReindexAll() {
-  Logger.log("🧹 Clearing placeholder cache entries...");
+  Logger.log("🧹 Clearing old cache to apply Registry Filters...");
   clearWoSummaryCache();
   Logger.log("🚀 Starting clean indexing pass...");
   runFullSystemIndexer();
 }
 
 /**
- * Smart-Targeted Indexer with 4-Minute Safety Valve for Large Backlogs.
+ * Smart-Targeted Indexer with 4-Minute Safety Valve & Registry Filtering.
  */
 function runFullSystemIndexer() {
   var startTime = new Date().getTime();
   var MAX_EXECUTION_TIME = 240000; // 4 minutes
   
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var validModels = getValidRegistryModels(ss);
+
   var folderId = CONFIG.FOLDERS.WORK_ORDER_FOLDER_ID;
   if (!folderId) {
     Logger.log("❌ Error: WORK_ORDER_FOLDER_ID not set.");
@@ -75,7 +101,6 @@ function runFullSystemIndexer() {
   var filesIterator = folder.getFiles();
   var uncachedList = [];
 
-  // 1. Identify Uncached or Placeholder Files
   while (filesIterator.hasNext()) {
     var f = filesIterator.next();
     var fName = f.getName();
@@ -100,7 +125,6 @@ function runFullSystemIndexer() {
 
   var indexedThisRun = 0;
 
-  // 2. Process Files Until 4-Minute Safety Window
   for (var i = 0; i < uncachedList.length; i++) {
     var elapsed = new Date().getTime() - startTime;
     if (elapsed > MAX_EXECUTION_TIME) {
@@ -118,15 +142,23 @@ function runFullSystemIndexer() {
       var bomRev = String(woSheet.getRange("D4").getValue()).trim();
       var expectedSerials = [];
 
-      var woLastRow = woSheet.getLastRow();
-      if (woLastRow >= 12) {
-        var raw = woSheet.getRange(12, 1, woLastRow - 11, 1).getValues();
-        for (var s = 0; s < raw.length; s++) {
-          var v = String(raw[s][0] || "").trim();
-          if (v && v.toLowerCase() !== "undefined" && v.toLowerCase() !== "null") {
-            expectedSerials.push(v);
+      var isTrackedPart = (Object.keys(validModels).length === 0) || validModels[baseModel.toUpperCase()];
+
+      // Only extract serials if it matches the Program Registry
+      if (isTrackedPart) {
+        var woLastRow = woSheet.getLastRow();
+        if (woLastRow >= 12) {
+          var raw = woSheet.getRange(12, 1, woLastRow - 11, 1).getValues();
+          for (var s = 0; s < raw.length; s++) {
+            var v = String(raw[s][0] || "").trim();
+            if (v && v.toLowerCase() !== "undefined" && v.toLowerCase() !== "null") {
+              expectedSerials.push(v);
+            }
           }
         }
+      } else {
+        baseModel = "IGNORED_PART"; // Tags it to be skipped permanently
+        bomRev = "-";
       }
 
       if (baseModel && baseModel !== "undefined") {
@@ -147,7 +179,7 @@ function runFullSystemIndexer() {
 }
 
 /**
- * Standard Dashboard Builder.
+ * Standard Dashboard Builder with Dynamic Registry Filtering.
  */
 function buildSummaryDashboard() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -155,6 +187,8 @@ function buildSummaryDashboard() {
   var logSheet = ss.getSheetByName(CONFIG.SHEET_NAMES.MASTER_DYNO_LOG);
 
   if (!summarySheet || !logSheet) return;
+
+  var validModels = getValidRegistryModels(ss);
 
   var folderId = CONFIG.FOLDERS.WORK_ORDER_FOLDER_ID;
   if (!folderId) return;
@@ -238,6 +272,12 @@ function buildSummaryDashboard() {
     } else {
       baseModel = "PENDING CACHE";
       bomRev = "-";
+    }
+
+    // 🔥 REGISTRY FILTER: Skip kits, service parts, and removed parts dynamically
+    if (baseModel === "IGNORED_PART") continue;
+    if (baseModel !== "PENDING CACHE" && Object.keys(validModels).length > 0 && !validModels[baseModel.toUpperCase()]) {
+      continue;
     }
 
     var totalQty = expectedSerials.length;
