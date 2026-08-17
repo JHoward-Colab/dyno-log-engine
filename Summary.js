@@ -1,6 +1,6 @@
 // =========================================================================
 // 📊 SUMMARY DASHBOARD CONTROLLER (Summary.js)
-// Time-Guarded Backlog Indexer & Interactive Dashboard Navigator
+// Self-Healing Backlog Indexer & Interactive Dashboard Navigator
 // =========================================================================
 
 /**
@@ -30,12 +30,35 @@ function robustExtractWoBatchNum(strVal) {
 }
 
 /**
- * Smart-Targeted Indexer with 4-Minute Safety Valve for Large Backlogs
- * Run this manually from the Apps Script editor to ingest backlogs (e.g. 400+ files).
+ * Validates whether cached JSON metadata contains real, indexed data.
+ */
+function isValidCache(jsonStr) {
+  if (!jsonStr) return false;
+  try {
+    var data = JSON.parse(jsonStr);
+    return data && data.bm && data.bm !== "PENDING CACHE" && data.bm !== "ERROR" && data.bm !== "";
+  } catch (e) {
+    return false;
+  }
+}
+
+/**
+ * One-Click Reset & Full Re-index
+ * Flushes invalid/placeholder cache entries and forces clean indexing.
+ */
+function resetAndReindexAll() {
+  Logger.log("🧹 Clearing placeholder cache entries...");
+  clearWoSummaryCache();
+  Logger.log("🚀 Starting clean indexing pass...");
+  runFullSystemIndexer();
+}
+
+/**
+ * Smart-Targeted Indexer with 4-Minute Safety Valve for Large Backlogs.
  */
 function runFullSystemIndexer() {
   var startTime = new Date().getTime();
-  var MAX_EXECUTION_TIME = 240000; // 4 minutes (prevents 6-minute Google kill switch)
+  var MAX_EXECUTION_TIME = 240000; // 4 minutes
   
   var folderId = CONFIG.FOLDERS.WORK_ORDER_FOLDER_ID;
   if (!folderId) {
@@ -52,7 +75,7 @@ function runFullSystemIndexer() {
   var filesIterator = folder.getFiles();
   var uncachedList = [];
 
-  // 1. Identify Uncached Files
+  // 1. Identify Uncached or Placeholder Files
   while (filesIterator.hasNext()) {
     var f = filesIterator.next();
     var fName = f.getName();
@@ -62,27 +85,27 @@ function runFullSystemIndexer() {
     if (fWoNum > 0 && fWoNum < BASELINE_WO_FLOOR) continue;
 
     var propKey = "WO_META_" + f.getId();
-    if (!allProps[propKey]) {
+    if (!isValidCache(allProps[propKey])) {
       uncachedList.push({ id: f.getId(), name: fName });
     }
   }
 
-  Logger.log("Found " + uncachedList.length + " uncached Work Orders needing indexing.");
+  Logger.log("Found " + uncachedList.length + " Work Orders needing valid indexing.");
 
   if (uncachedList.length === 0) {
-    Logger.log("✅ All Work Orders are already 100% indexed! Refreshing dashboard...");
+    Logger.log("✅ All Work Orders are 100% validly indexed! Refreshing dashboard...");
     buildSummaryDashboard();
     return;
   }
 
   var indexedThisRun = 0;
 
-  // 2. Process Files Until 4-Minute Warning
+  // 2. Process Files Until 4-Minute Safety Window
   for (var i = 0; i < uncachedList.length; i++) {
     var elapsed = new Date().getTime() - startTime;
     if (elapsed > MAX_EXECUTION_TIME) {
-      Logger.log("⏱️ 4-Minute Safety Limit Reached. Indexed " + indexedThisRun + " files this run.");
-      Logger.log("⚠️ Please click 'Run' again to continue indexing the remaining " + (uncachedList.length - indexedThisRun) + " files.");
+      Logger.log("⏱️ 4-Minute Limit Reached. Validly indexed " + indexedThisRun + " files this run.");
+      Logger.log("⚠️ Click 'Run' again to continue indexing the remaining " + (uncachedList.length - indexedThisRun) + " files.");
       break; 
     }
 
@@ -106,25 +129,25 @@ function runFullSystemIndexer() {
         }
       }
 
-      var payloadStr = JSON.stringify({ bm: baseModel, br: bomRev, es: expectedSerials });
-      propsService.setProperty("WO_META_" + item.id, payloadStr);
-      indexedThisRun++;
-      
-      Logger.log("Indexed (" + indexedThisRun + "/" + uncachedList.length + "): " + item.name);
+      if (baseModel && baseModel !== "undefined") {
+        var payloadStr = JSON.stringify({ bm: baseModel, br: bomRev, es: expectedSerials });
+        propsService.setProperty("WO_META_" + item.id, payloadStr);
+        indexedThisRun++;
+        Logger.log("Indexed (" + indexedThisRun + "/" + uncachedList.length + "): " + item.name + " -> " + baseModel);
+      }
 
     } catch (err) {
       Logger.log("Failed to index " + item.name + ": " + err.toString());
     }
   }
 
-  Logger.log("Render phase starting. Updating Summary tab with newly cached files...");
+  Logger.log("Updating Summary tab dashboard...");
   buildSummaryDashboard();
-  SpreadsheetApp.flush(); // Force the screen to update immediately
+  SpreadsheetApp.flush();
 }
 
 /**
- * Standard Dashboard Builder (Incremental 3-File Caching)
- * Used for automated background triggers and live button clicks.
+ * Standard Dashboard Builder.
  */
 function buildSummaryDashboard() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -149,7 +172,6 @@ function buildSummaryDashboard() {
   var sumCols = CONFIG.COLUMNS.SUMMARY || {};
 
   var BASELINE_WO_FLOOR = 1608;
-  var MAX_UNCACHED_PER_RUN = 3; // Keep normal runs extremely fast
 
   // STEP 1: Group Dyno Runs Chronologically
   var allRunsBySerial = {};
@@ -162,11 +184,11 @@ function buildSummaryDashboard() {
     }
   }
 
-  // STEP 2: Load In-Memory Properties
+  // STEP 2: Load Properties
   var propsService = PropertiesService.getScriptProperties();
   var allProps = propsService.getProperties();
 
-  // STEP 3: Fast File Enumeration
+  // STEP 3: File Enumeration
   var filesIterator = folder.getFiles();
   var fileList = [];
 
@@ -181,18 +203,17 @@ function buildSummaryDashboard() {
     fileList.push({ id: f.getId(), name: fName, woNum: fWoNum });
   }
 
-  // STEP 4: Sort Ascending (1608, 1609, 1610...)
+  // STEP 4: Sort Ascending
   fileList.sort(function(a, b) {
     return (a.woNum !== b.woNum && a.woNum > 0 && b.woNum > 0) ? (a.woNum - b.woNum) : a.name.localeCompare(b.name);
   });
 
-  var uncachedOpenedCount = 0;
   var tableOutput = [];
   var bgColors = [];
   var fontColors = [];
   var fontWeights = [];
 
-  // STEP 5: Process Matrix
+  // STEP 5: Matrix Processing
   for (var i = 0; i < fileList.length; i++) {
     var item = fileList[i];
     var fileId = item.id;
@@ -209,44 +230,12 @@ function buildSummaryDashboard() {
     var propKey = "WO_META_" + fileId;
     var cachedStr = allProps[propKey];
 
-    if (cachedStr) {
-      // INSTANT 0ms LOAD FROM PERSISTENT STORAGE
+    if (isValidCache(cachedStr)) {
       var cachedData = JSON.parse(cachedStr);
       baseModel = cachedData.bm || "";
       bomRev = cachedData.br || "";
       expectedSerials = cachedData.es || [];
-    } else if (uncachedOpenedCount < MAX_UNCACHED_PER_RUN) {
-      // FAST INCREMENTAL CACHING (Max 3)
-      uncachedOpenedCount++;
-      try {
-        var woSs = SpreadsheetApp.openById(fileId);
-        var woSheet = woSs.getSheets()[0];
-
-        baseModel = String(woSheet.getRange("D3").getValue()).trim();
-        bomRev = String(woSheet.getRange("D4").getValue()).trim();
-
-        var woLastRow = woSheet.getLastRow();
-        if (woLastRow >= 12) {
-          var raw = woSheet.getRange(12, 1, woLastRow - 11, 1).getValues();
-          for (var s = 0; s < raw.length; s++) {
-            var v = String(raw[s][0] || "").trim();
-            if (v && v.toLowerCase() !== "undefined" && v.toLowerCase() !== "null") {
-              expectedSerials.push(v);
-            }
-          }
-        }
-
-        var payloadStr = JSON.stringify({ bm: baseModel, br: bomRev, es: expectedSerials });
-        propsService.setProperty(propKey, payloadStr);
-        allProps[propKey] = payloadStr; // Sync local object
-
-      } catch (openErr) {
-        Logger.log("Error opening WO file " + fileName + ": " + openErr.toString());
-        baseModel = "ERROR";
-        bomRev = "-";
-      }
     } else {
-      // DEFER TO NEXT BACKGROUND RUN
       baseModel = "PENDING CACHE";
       bomRev = "-";
     }
@@ -267,13 +256,11 @@ function buildSummaryDashboard() {
       if (runs.length > 0) {
         testedCount++;
 
-        // 1. First Pass Yield Evaluation (Earliest Run)
         var firstRun = runs[0];
         if (String(firstRun[(logCols.OVERALL_STATUS || 21) - 1] || "").toUpperCase().includes("PASS")) {
           firstPassCount++;
         }
 
-        // 2. Active Status Evaluation (Latest Run)
         var latestRun = runs[runs.length - 1];
         var latestOverall = String(latestRun[(logCols.OVERALL_STATUS || 21) - 1] || "").toUpperCase();
         var latestDiag = String(latestRun[(logCols.DIAGNOSTICS || 22) - 1] || "");
@@ -335,7 +322,7 @@ function buildSummaryDashboard() {
     fontWeights.push(["bold", "bold", "normal", "normal", "normal", "normal", "normal", "normal"]);
   }
 
-  // STEP 6: Single Bulk Output to Summary Sheet
+  // STEP 6: Render Sheet
   var maxRows = Math.max(summarySheet.getLastRow() - 1, 1);
   summarySheet.getRange(2, 1, maxRows, 8).clearContent().setBackground(null).setFontColor(null).setFontWeight("normal");
 
@@ -349,7 +336,7 @@ function buildSummaryDashboard() {
 }
 
 /**
- * Flushes all cached metadata. Only use if files change significantly.
+ * Flushes all cached metadata.
  */
 function clearWoSummaryCache() {
   var props = PropertiesService.getScriptProperties();
@@ -362,7 +349,6 @@ function clearWoSummaryCache() {
 
 /**
  * Interactive Work Order Jumper.
- * Clicking Column A (Work_Order_Status) or Column B (Work_Order_Number) loads that Work Order into Operator_Station.
  */
 function onSelectionChange(e) {
   if (!e || !e.range) return;
