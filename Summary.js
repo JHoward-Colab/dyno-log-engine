@@ -1,6 +1,6 @@
 // =========================================================================
 // 📊 SUMMARY DASHBOARD CONTROLLER (Summary.js)
-// Registry-Filtered, Multi-Tier Serial Matching Backlog Engine
+// Registry-Filtered, Multi-Tier Serial Engine & Interactive Navigator
 // =========================================================================
 
 /**
@@ -36,6 +36,9 @@ function robustExtractWoBatchNum(strVal) {
   return match ? (parseInt(match[0], 10) || 0) : (parseInt(cleanDigits, 10) || 0);
 }
 
+/**
+ * Validates whether cached JSON metadata contains real, indexed data.
+ */
 function isValidCache(jsonStr) {
   if (!jsonStr) return false;
   try {
@@ -75,7 +78,122 @@ function getValidRegistryModels(ss) {
 }
 
 /**
- * Rebuilds the Summary Dashboard using multi-tier serial lookup.
+ * One-Click Reset & Full Re-index
+ * Flushes invalid/placeholder cache entries and forces clean indexing.
+ */
+function resetAndReindexAll() {
+  Logger.log("🧹 Clearing placeholder cache entries...");
+  clearWoSummaryCache();
+  Logger.log("🚀 Starting clean indexing pass...");
+  runFullSystemIndexer();
+}
+
+/**
+ * Smart-Targeted Indexer with 4-Minute Safety Valve & Registry Filtering.
+ */
+function runFullSystemIndexer() {
+  var startTime = new Date().getTime();
+  var MAX_EXECUTION_TIME = 240000; // 4 minutes
+  
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var validModels = getValidRegistryModels(ss);
+
+  var folderId = CONFIG.FOLDERS.WORK_ORDER_FOLDER_ID;
+  if (!folderId) {
+    Logger.log("❌ Error: WORK_ORDER_FOLDER_ID not set.");
+    return;
+  }
+
+  var folder = DriveApp.getFolderById(folderId);
+  var BASELINE_WO_FLOOR = 1608;
+
+  var propsService = PropertiesService.getScriptProperties();
+  var allProps = propsService.getProperties();
+
+  var filesIterator = folder.getFiles();
+  var uncachedList = [];
+
+  // 1. Identify Uncached Files
+  while (filesIterator.hasNext()) {
+    var f = filesIterator.next();
+    var fName = f.getName();
+    if (fName.indexOf(".xlsx") !== -1 && fName.indexOf("~") === 0) continue;
+
+    var fWoNum = robustExtractWoBatchNum(fName);
+    if (fWoNum > 0 && fWoNum < BASELINE_WO_FLOOR) continue;
+
+    var propKey = "WO_META_" + f.getId();
+    if (!isValidCache(allProps[propKey])) {
+      uncachedList.push({ id: f.getId(), name: fName });
+    }
+  }
+
+  Logger.log("Found " + uncachedList.length + " Work Orders needing valid indexing.");
+
+  if (uncachedList.length === 0) {
+    Logger.log("✅ All Work Orders are 100% validly indexed! Refreshing dashboard...");
+    buildSummaryDashboard();
+    return;
+  }
+
+  var indexedThisRun = 0;
+
+  // 2. Process Files Until 4-Minute Safety Window
+  for (var i = 0; i < uncachedList.length; i++) {
+    var elapsed = new Date().getTime() - startTime;
+    if (elapsed > MAX_EXECUTION_TIME) {
+      Logger.log("⏱️ 4-Minute Limit Reached. Validly indexed " + indexedThisRun + " files this run.");
+      Logger.log("⚠️ Click 'Run' again to continue indexing the remaining " + (uncachedList.length - indexedThisRun) + " files.");
+      break; 
+    }
+
+    var item = uncachedList[i];
+    try {
+      var woSs = SpreadsheetApp.openById(item.id);
+      var woSheet = woSs.getSheets()[0];
+
+      var baseModel = String(woSheet.getRange("D3").getValue()).trim();
+      var bomRev = String(woSheet.getRange("D4").getValue()).trim();
+      var expectedSerials = [];
+
+      var isTrackedPart = (Object.keys(validModels).length === 0) || validModels[baseModel.toUpperCase()];
+
+      // Only extract serials if it matches the Program Registry
+      if (isTrackedPart) {
+        var woLastRow = woSheet.getLastRow();
+        if (woLastRow >= 12) {
+          var raw = woSheet.getRange(12, 1, woLastRow - 11, 1).getValues();
+          for (var s = 0; s < raw.length; s++) {
+            var v = String(raw[s][0] || "").trim();
+            if (v && v.toLowerCase() !== "undefined" && v.toLowerCase() !== "null") {
+              expectedSerials.push(v);
+            }
+          }
+        }
+      } else {
+        baseModel = "IGNORED_PART"; // Tags it to be skipped permanently
+        bomRev = "-";
+      }
+
+      if (baseModel && baseModel !== "undefined") {
+        var payloadStr = JSON.stringify({ bm: baseModel, br: bomRev, es: expectedSerials });
+        propsService.setProperty("WO_META_" + item.id, payloadStr);
+        indexedThisRun++;
+        Logger.log("Indexed (" + indexedThisRun + "/" + uncachedList.length + "): " + item.name + " -> " + baseModel);
+      }
+
+    } catch (err) {
+      Logger.log("Failed to index " + item.name + ": " + err.toString());
+    }
+  }
+
+  Logger.log("Updating Summary tab dashboard...");
+  buildSummaryDashboard();
+  SpreadsheetApp.flush();
+}
+
+/**
+ * Standard Dashboard Builder with Dynamic Registry Filtering.
  */
 function buildSummaryDashboard() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -85,6 +203,7 @@ function buildSummaryDashboard() {
   if (!summarySheet || !logSheet) return;
 
   var validModels = getValidRegistryModels(ss);
+
   var folderId = CONFIG.FOLDERS.WORK_ORDER_FOLDER_ID;
   if (!folderId) return;
 
@@ -190,6 +309,7 @@ function buildSummaryDashboard() {
       bomRev = "-";
     }
 
+    // 🔥 REGISTRY FILTER: Skip kits, service parts, and removed parts dynamically
     if (baseModel === "IGNORED_PART") continue;
     if (baseModel !== "PENDING CACHE" && Object.keys(validModels).length > 0 && !validModels[baseModel.toUpperCase()]) {
       continue;
@@ -313,102 +433,21 @@ function buildSummaryDashboard() {
 }
 
 /**
- * Smart-Targeted Indexer with 4-Minute Safety Valve & Registry Filtering.
+ * Flushes all cached metadata.
  */
-function runFullSystemIndexer() {
-  var startTime = new Date().getTime();
-  var MAX_EXECUTION_TIME = 240000;
-  
-  var ss = SpreadsheetApp.getActiveSpreadsheet();
-  var validModels = getValidRegistryModels(ss);
-
-  var folderId = CONFIG.FOLDERS.WORK_ORDER_FOLDER_ID;
-  if (!folderId) return;
-
-  var folder = DriveApp.getFolderById(folderId);
-  var BASELINE_WO_FLOOR = 1608;
-
-  var propsService = PropertiesService.getScriptProperties();
-  var allProps = propsService.getProperties();
-
-  var filesIterator = folder.getFiles();
-  var uncachedList = [];
-
-  while (filesIterator.hasNext()) {
-    var f = filesIterator.next();
-    var fName = f.getName();
-    if (fName.indexOf(".xlsx") !== -1 && fName.indexOf("~") === 0) continue;
-
-    var fWoNum = robustExtractWoBatchNum(fName);
-    if (fWoNum > 0 && fWoNum < BASELINE_WO_FLOOR) continue;
-
-    var propKey = "WO_META_" + f.getId();
-    if (!isValidCache(allProps[propKey])) {
-      uncachedList.push({ id: f.getId(), name: fName });
-    }
-  }
-
-  if (uncachedList.length === 0) {
-    buildSummaryDashboard();
-    return;
-  }
-
-  var indexedThisRun = 0;
-
-  for (var i = 0; i < uncachedList.length; i++) {
-    var elapsed = new Date().getTime() - startTime;
-    if (elapsed > MAX_EXECUTION_TIME) break; 
-
-    var item = uncachedList[i];
-    try {
-      var woSs = SpreadsheetApp.openById(item.id);
-      var woSheet = woSs.getSheets()[0];
-
-      var baseModel = String(woSheet.getRange("D3").getValue()).trim();
-      var bomRev = String(woSheet.getRange("D4").getValue()).trim();
-      var expectedSerials = [];
-
-      var isTrackedPart = (Object.keys(validModels).length === 0) || validModels[baseModel.toUpperCase()];
-
-      if (isTrackedPart) {
-        var woLastRow = woSheet.getLastRow();
-        if (woLastRow >= 12) {
-          var raw = woSheet.getRange(12, 1, woLastRow - 11, 1).getValues();
-          for (var s = 0; s < raw.length; s++) {
-            var v = String(raw[s][0] || "").trim();
-            if (v && v.toLowerCase() !== "undefined" && v.toLowerCase() !== "null") {
-              expectedSerials.push(v);
-            }
-          }
-        }
-      } else {
-        baseModel = "IGNORED_PART";
-        bomRev = "-";
-      }
-
-      if (baseModel && baseModel !== "undefined") {
-        var payloadStr = JSON.stringify({ bm: baseModel, br: bomRev, es: expectedSerials });
-        propsService.setProperty("WO_META_" + item.id, payloadStr);
-        indexedThisRun++;
-      }
-
-    } catch (err) {
-      Logger.log("Failed to index " + item.name + ": " + err.toString());
-    }
-  }
-
-  buildSummaryDashboard();
-  SpreadsheetApp.flush();
-}
-
 function clearWoSummaryCache() {
   var props = PropertiesService.getScriptProperties();
   var keys = props.getKeys();
   for (var i = 0; i < keys.length; i++) {
     if (keys[i].indexOf("WO_META_") === 0) props.deleteProperty(keys[i]);
   }
+  Logger.log("Summary persistent metadata cache cleared.");
 }
 
+/**
+ * Interactive Work Order Jumper.
+ * Formats zero-padded file names (e.g., WO-002038 -> WO-2038) before pushing to Operator_Station.
+ */
 function onSelectionChange(e) {
   if (!e || !e.range) return;
   var sheet = e.range.getSheet();
@@ -419,11 +458,15 @@ function onSelectionChange(e) {
     var rawVal = String(sheet.getRange(row, 2).getValue()).trim();
     if (!rawVal || rawVal.startsWith("⚠️") || rawVal.startsWith("❌")) return;
 
+    // Strip leading zeroes (e.g. "WO-002038" -> 2038 -> "WO-2038")
+    var woBatch = robustExtractWoBatchNum(rawVal);
+    var formattedVal = woBatch > 0 ? "WO-" + woBatch : rawVal;
+
     var ss = e.source || SpreadsheetApp.getActiveSpreadsheet();
     var opSheet = ss.getSheetByName(CONFIG.SHEET_NAMES.OPERATOR_STATION);
 
     if (opSheet) {
-      opSheet.getRange(CONFIG.OPERATOR_STATION.RANGES.BARCODE_INPUT).setValue(rawVal);
+      opSheet.getRange(CONFIG.OPERATOR_STATION.RANGES.BARCODE_INPUT).setValue(formattedVal);
       manageOperatorStation({ source: ss, range: opSheet.getRange(CONFIG.OPERATOR_STATION.RANGES.BARCODE_INPUT) });
       ss.setActiveSheet(opSheet);
     }
