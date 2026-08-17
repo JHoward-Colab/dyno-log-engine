@@ -36,6 +36,34 @@ function cleanKey(val) {
 }
 
 /**
+ * Robust Serial Matcher between Work Order barcodes (e.g. 43081008001979001) and Dyno Log serials (e.g. 001979-001).
+ */
+function isSerialMatch(expSerial, logSerial) {
+  var cExp = cleanKey(expSerial);
+  var cLog = cleanKey(logSerial);
+  if (!cExp || !cLog) return false;
+
+  if (cExp === cLog) return true;
+  if (cExp.endsWith(cLog) || cLog.endsWith(cExp)) return true;
+
+  var cLogNoZero = cLog.replace(/^0+/, "");
+  var cExpNoZero = cExp.replace(/^0+/, "");
+  if (cExp.endsWith(cLogNoZero) || cLog.endsWith(cExpNoZero)) return true;
+
+  // Match unit suffix (last 3 digits) and Work Order batch digits
+  if (cExp.length >= 6 && cLog.length >= 3) {
+    var expUnit = cExp.slice(-3);
+    var logUnit = cLog.slice(-3);
+    if (expUnit === logUnit) {
+      var logBatch = cLog.slice(0, -3).replace(/^0+/, "");
+      if (logBatch && cExp.indexOf(logBatch) !== -1) return true;
+    }
+  }
+
+  return false;
+}
+
+/**
  * Safely fetches column value from a log row using CONFIG key or 0-indexed fallback.
  */
 function getLogVal(row, colConfigProp, defaultIndex) {
@@ -117,7 +145,6 @@ function manageOperatorStation(e) {
       var woPartNumber = String(woSheet.getRange("D3").getValue()).trim(); 
       var woBomRevision = String(woSheet.getRange("D4").getValue()).trim();   
       
-      // Extract expected serial numbers from Cell A12 downwards
       var expectedSerials = [];
       var woLastRow = woSheet.getLastRow();
       if (woLastRow >= 12) {
@@ -303,22 +330,32 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber,
     }
   }
 
-  // Combine expected Work Order serials with tested Dyno Log serials
+  // Cross-reference expected Work Order serials against tested Dyno Log serials using fuzzy matching
   var itemsToProcess = [];
-  var processedCleanSerials = {};
+  var matchedLogKeys = {};
 
   if (expectedSerials && expectedSerials.length > 0) {
     for (var eIdx = 0; eIdx < expectedSerials.length; eIdx++) {
       var expSerial = expectedSerials[eIdx];
-      var cleanExp = cleanKey(expSerial);
-      processedCleanSerials[cleanExp] = true;
+      var matchedLogItem = null;
 
-      if (latestLogBySerial[cleanExp]) {
+      var logSerialKeys = Object.keys(latestLogBySerial);
+      for (var lIdx = 0; lIdx < logSerialKeys.length; lIdx++) {
+        var logKey = logSerialKeys[lIdx];
+        var logItem = latestLogBySerial[logKey];
+        if (isSerialMatch(expSerial, logItem.trueSerial)) {
+          matchedLogItem = logItem;
+          matchedLogKeys[logKey] = true;
+          break;
+        }
+      }
+
+      if (matchedLogItem) {
         itemsToProcess.push({
-          trueSerial: latestLogBySerial[cleanExp].trueSerial,
+          trueSerial: matchedLogItem.trueSerial,
           isTested: true,
-          data: latestLogBySerial[cleanExp].data,
-          rowIdx: latestLogBySerial[cleanExp].rowIdx
+          data: matchedLogItem.data,
+          rowIdx: matchedLogItem.rowIdx
         });
       } else {
         itemsToProcess.push({
@@ -331,11 +368,11 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber,
     }
   }
 
-  // Append any additional tested serials found in Dyno Log not explicitly in A12+
+  // Append any extra tested dyno log serials not found in expectedSerials
   var logSerialKeys = Object.keys(latestLogBySerial);
   for (var lIdx = 0; lIdx < logSerialKeys.length; lIdx++) {
     var k = logSerialKeys[lIdx];
-    if (!processedCleanSerials[k]) {
+    if (!matchedLogKeys[k]) {
       itemsToProcess.push({
         trueSerial: latestLogBySerial[k].trueSerial,
         isTested: true,
