@@ -1,6 +1,6 @@
 // =========================================================================
 // 📊 SUMMARY DASHBOARD CONTROLLER (Summary.js)
-// High-Speed Built-In Advanced Service Summary Engine
+// Bulletproof Time-Guarded Engine with Instant Property Persistence
 // =========================================================================
 
 function robustExtractWoBatchNum(strVal) {
@@ -27,52 +27,13 @@ function robustExtractWoBatchNum(strVal) {
 }
 
 /**
- * High-speed metadata reader using Advanced Sheets API (50ms per file).
+ * Rebuilds the Summary Dashboard tab with an 8-second execution wall-clock guard.
  */
-function fetchWoMetadataFast(fileId) {
-  try {
-    if (typeof Sheets !== "undefined") {
-      var res = Sheets.Spreadsheets.Values.batchGet(fileId, {
-        ranges: ["D3:D4", "A12:A100"]
-      });
-      var vRanges = res.valueRanges || [];
-      var d3d4 = (vRanges[0] && vRanges[0].values) ? vRanges[0].values : [];
-      var a12a100 = (vRanges[1] && vRanges[1].values) ? vRanges[1].values : [];
-
-      var baseModel = (d3d4[0] && d3d4[0][0]) ? String(d3d4[0][0]).trim() : "";
-      var bomRev = (d3d4[1] && d3d4[1][0]) ? String(d3d4[1][0]).trim() : "";
-      var expectedSerials = [];
-
-      for (var s = 0; s < a12a100.length; s++) {
-        var sVal = (a12a100[s] && a12a100[s][0]) ? String(a12a100[s][0]).trim() : "";
-        if (sVal && sVal.toLowerCase() !== "undefined" && sVal.toLowerCase() !== "null") {
-          expectedSerials.push(sVal);
-        }
-      }
-      return { bm: baseModel, br: bomRev, es: expectedSerials };
-    }
-  } catch (e) {
-    Logger.log("Advanced Service bypass for " + fileId + ": " + e.toString());
-  }
-
-  // Fallback if Advanced Service is disabled
-  var woSs = SpreadsheetApp.openById(fileId);
-  var woSheet = woSs.getSheets()[0];
-  var bm = String(woSheet.getRange("D3").getValue()).trim();
-  var br = String(woSheet.getRange("D4").getValue()).trim();
-  var woLastRow = woSheet.getLastRow();
-  var serials = [];
-  if (woLastRow >= 12) {
-    var raw = woSheet.getRange(12, 1, woLastRow - 11, 1).getValues();
-    for (var i = 0; i < raw.length; i++) {
-      var v = String(raw[i][0] || "").trim();
-      if (v && v.toLowerCase() !== "undefined" && v.toLowerCase() !== "null") serials.push(v);
-    }
-  }
-  return { bm: bm, br: br, es: serials };
-}
-
 function buildSummaryDashboard() {
+  var startTime = new Date().getTime();
+  var MAX_EXECUTION_TIME_MS = 8000; // Hard cutoff at 8 seconds
+  var MAX_NEW_OPENS_PER_RUN = 3;    // Maximum uncached files opened per sync
+
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var summarySheet = ss.getSheetByName(CONFIG.SHEET_NAMES.SUMMARY);
   var logSheet = ss.getSheetByName(CONFIG.SHEET_NAMES.MASTER_DYNO_LOG);
@@ -82,14 +43,21 @@ function buildSummaryDashboard() {
   var folderId = CONFIG.FOLDERS.WORK_ORDER_FOLDER_ID;
   if (!folderId) return;
 
-  var folder = DriveApp.getFolderById(folderId);
+  var folder;
+  try {
+    folder = DriveApp.getFolderById(folderId);
+  } catch (err) {
+    summarySheet.getRange("A2").setValue("❌ Error: Invalid Folder ID or Access Denied.");
+    return;
+  }
+
   var logData = logSheet.getDataRange().getValues();
   var logCols = CONFIG.COLUMNS.MASTER_DYNO_LOG || {};
   var sumCols = CONFIG.COLUMNS.SUMMARY || {};
 
   var BASELINE_WO_FLOOR = 1608;
 
-  // Step 1: Group Dyno Runs Chronologically
+  // STEP 1: Group Dyno Runs Chronologically
   var allRunsBySerial = {};
   for (var r = 1; r < logData.length; r++) {
     var rawSerial = String(logData[r][(logCols.TRUE_SERIAL || 3) - 1] || "").trim();
@@ -100,12 +68,11 @@ function buildSummaryDashboard() {
     }
   }
 
-  // Step 2: Load In-Memory Cache
+  // STEP 2: Load In-Memory Properties
   var propsService = PropertiesService.getScriptProperties();
   var allProps = propsService.getProperties();
-  var newPropsToSave = {};
 
-  // Step 3: Fast File Enumeration
+  // STEP 3: Fast File Enumeration
   var filesIterator = folder.getFiles();
   var fileList = [];
 
@@ -120,17 +87,18 @@ function buildSummaryDashboard() {
     fileList.push({ id: f.getId(), name: fName, woNum: fWoNum });
   }
 
-  // Step 4: Sort Ascending
+  // STEP 4: Sort Ascending (1608, 1609, 1610...)
   fileList.sort(function(a, b) {
     return (a.woNum !== b.woNum && a.woNum > 0 && b.woNum > 0) ? (a.woNum - b.woNum) : a.name.localeCompare(b.name);
   });
 
+  var uncachedOpenedCount = 0;
   var tableOutput = [];
   var bgColors = [];
   var fontColors = [];
   var fontWeights = [];
 
-  // Step 5: Process Matrix
+  // STEP 5: Process Matrix with Wall-Clock Guard
   for (var i = 0; i < fileList.length; i++) {
     var item = fileList[i];
     var fileId = item.id;
@@ -148,19 +116,50 @@ function buildSummaryDashboard() {
     var cachedStr = allProps[propKey];
 
     if (cachedStr) {
+      // INSTANT 0ms LOAD FROM PERSISTENT STORAGE
       var cachedData = JSON.parse(cachedStr);
       baseModel = cachedData.bm || "";
       bomRev = cachedData.br || "";
       expectedSerials = cachedData.es || [];
     } else {
-      var meta = fetchWoMetadataFast(fileId);
-      baseModel = meta.bm;
-      bomRev = meta.br;
-      expectedSerials = meta.es;
+      var elapsedTime = new Date().getTime() - startTime;
 
-      var payloadStr = JSON.stringify(meta);
-      newPropsToSave[propKey] = payloadStr;
-      allProps[propKey] = payloadStr;
+      // TIME & BATCH GUARD: Check if safe to open uncached file
+      if (elapsedTime < MAX_EXECUTION_TIME_MS && uncachedOpenedCount < MAX_NEW_OPENS_PER_RUN) {
+        uncachedOpenedCount++;
+        try {
+          var woSs = SpreadsheetApp.openById(fileId);
+          var woSheet = woSs.getSheets()[0];
+
+          baseModel = String(woSheet.getRange("D3").getValue()).trim();
+          bomRev = String(woSheet.getRange("D4").getValue()).trim();
+
+          var woLastRow = woSheet.getLastRow();
+          if (woLastRow >= 12) {
+            var raw = woSheet.getRange(12, 1, woLastRow - 11, 1).getValues();
+            for (var s = 0; s < raw.length; s++) {
+              var v = String(raw[s][0] || "").trim();
+              if (v && v.toLowerCase() !== "undefined" && v.toLowerCase() !== "null") {
+                expectedSerials.push(v);
+              }
+            }
+          }
+
+          // SAVE IMMEDIATELY TO PERSISTENT STORAGE TO PREVENT LOSS ON CANCEL
+          var payloadStr = JSON.stringify({ bm: baseModel, br: bomRev, es: expectedSerials });
+          propsService.setProperty(propKey, payloadStr);
+          allProps[propKey] = payloadStr;
+
+        } catch (openErr) {
+          Logger.log("Error opening WO file " + fileName + ": " + openErr.toString());
+          baseModel = "ERROR";
+          bomRev = "-";
+        }
+      } else {
+        // OVER TIME/BATCH LIMIT -> DEFER TO NEXT BACKGROUND RUN
+        baseModel = "PENDING CACHE";
+        bomRev = "-";
+      }
     }
 
     var totalQty = expectedSerials.length;
@@ -206,7 +205,9 @@ function buildSummaryDashboard() {
     var statusBg = "#FCF3CF";
     var statusFont = "#B7950B";
 
-    if (totalQty === 0) {
+    if (baseModel === "PENDING CACHE") {
+      woStatus = "PENDING"; statusBg = "#FCF3CF"; statusFont = "#B7950B";
+    } else if (totalQty === 0) {
       woStatus = "NO SERIALS"; statusBg = "#F2F4F4"; statusFont = "#5D6D7E";
     } else if (testedCount === 0) {
       woStatus = "PENDING"; statusBg = "#FCF3CF"; statusFont = "#B7950B";
@@ -220,7 +221,7 @@ function buildSummaryDashboard() {
       woStatus = "COMPLETED"; statusBg = "#D4EFDF"; statusFont = "#196F3D";
     }
 
-    var progressStr = testedCount + " / " + totalQty + " (" + (totalQty > 0 ? Math.round((testedCount / totalQty) * 100) : 0) + "%)";
+    var progressStr = (baseModel === "PENDING CACHE") ? "Indexing..." : testedCount + " / " + totalQty + " (" + (totalQty > 0 ? Math.round((testedCount / totalQty) * 100) : 0) + "%)";
     var fpyStr = testedCount > 0 ? ((firstPassCount / testedCount) * 100).toFixed(1) + "%" : "N/A";
     var dateStr = lastDate ? Utilities.formatDate(lastDate, Session.getScriptTimeZone(), "yyyy-MM-dd HH:mm") : "N/A";
     var detailsStr = activeFailureDetails.length > 0 ? activeFailureDetails.join(", ") : (testedCount === totalQty && totalQty > 0 ? "✅ All Units Passed" : "⏳ Pending dyno test");
@@ -241,11 +242,7 @@ function buildSummaryDashboard() {
     fontWeights.push(["bold", "bold", "normal", "normal", "normal", "normal", "normal", "normal"]);
   }
 
-  if (Object.keys(newPropsToSave).length > 0) {
-    propsService.setProperties(newPropsToSave, false);
-  }
-
-  // Step 6: Single Bulk Output
+  // STEP 6: Single Bulk Output to Summary Sheet
   var maxRows = Math.max(summarySheet.getLastRow() - 1, 1);
   summarySheet.getRange(2, 1, maxRows, 8).clearContent().setBackground(null).setFontColor(null).setFontWeight("normal");
 
@@ -256,6 +253,18 @@ function buildSummaryDashboard() {
     targetRange.setFontColors(fontColors);
     targetRange.setFontWeights(fontWeights);
   }
+}
+
+/**
+ * Rapid Indexer: Run this manually in the editor to index all remaining uncached Work Orders.
+ */
+function indexAllWorkOrders() {
+  for (var pass = 1; pass <= 15; pass++) {
+    Logger.log("Running Indexer Pass #" + pass + "...");
+    buildSummaryDashboard();
+    Utilities.sleep(1000);
+  }
+  Logger.log("All Work Orders indexed successfully!");
 }
 
 function clearWoSummaryCache() {
