@@ -34,7 +34,7 @@ function robustExtractWoBatchNum(strVal) {
 }
 
 /**
- * Rebuilds the Summary Dashboard tab incrementally without wiping existing progress.
+ * Rebuilds the Summary Dashboard tab incrementally starting at WO 1608 baseline.
  */
 function buildSummaryDashboard() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -61,8 +61,10 @@ function buildSummaryDashboard() {
   var logCols = CONFIG.COLUMNS.MASTER_DYNO_LOG || {};
   var sumCols = CONFIG.COLUMNS.SUMMARY || {};
 
-  // STEP 1: Index Master_Dyno_Log & Find Lowest Baseline WO
-  var minWoNumber = 999999;
+  // HARD BASELINE FLOOR: Ignore any Work Orders prior to WO 1608
+  var BASELINE_WO_FLOOR = 1608;
+  var minWoNumber = BASELINE_WO_FLOOR;
+
   var logMapByCleanSerial = {};
   var logSerialsList = [];
 
@@ -72,17 +74,10 @@ function buildSummaryDashboard() {
       var cSer = cleanKey(rawSerial);
       logMapByCleanSerial[cSer] = logData[r];
       logSerialsList.push({ clean: cSer, raw: rawSerial, row: logData[r] });
-
-      var woNum = robustExtractWoBatchNum(rawSerial);
-      if (woNum > 0 && woNum < minWoNumber) {
-        minWoNumber = woNum;
-      }
     }
   }
 
-  if (minWoNumber === 999999) minWoNumber = 0;
-
-  // STEP 2: Fast Direct Folder Scan (getFiles is 10x faster than searchFiles)
+  // STEP 1: Fast Direct Folder Scan Filtering Out Files < WO 1608
   var filesIterator = folder.getFiles();
   var fileList = [];
 
@@ -90,11 +85,12 @@ function buildSummaryDashboard() {
     var f = filesIterator.next();
     var fName = f.getName();
 
-    // Skip non-spreadsheet files or legacy WOs prior to baseline
     if (fName.indexOf(".xlsx") !== -1 && fName.indexOf("~") === 0) continue;
 
     var fWoNum = robustExtractWoBatchNum(fName);
-    if (fWoNum > 0 && minWoNumber > 0 && fWoNum < minWoNumber) {
+
+    // Skip any files before baseline floor 1608
+    if (fWoNum > 0 && fWoNum < minWoNumber) {
       continue;
     }
 
@@ -106,7 +102,7 @@ function buildSummaryDashboard() {
     });
   }
 
-  // STEP 3: Sort Work Orders Ascending (1979, 1980, 1981...)
+  // STEP 2: Sort Work Orders Ascending starting from WO 1608
   fileList.sort(function(a, b) {
     if (a.woNum !== b.woNum && a.woNum > 0 && b.woNum > 0) {
       return a.woNum - b.woNum;
@@ -116,14 +112,14 @@ function buildSummaryDashboard() {
 
   var props = PropertiesService.getScriptProperties();
   var uncachedOpenedCount = 0;
-  var MAX_UNCACHED_OPENS = 4; // Batch cap per run to guarantee execution < 3s
+  var MAX_UNCACHED_OPENS = 5; // Capped at 5 new uncached opens per run
 
   var tableOutput = [];
   var bgColors = [];
   var fontColors = [];
   var fontWeights = [];
 
-  // STEP 4: Incremental Compound Build
+  // STEP 3: Process Active Work Orders >= 1608
   for (var i = 0; i < fileList.length; i++) {
     var item = fileList[i];
     var fileId = item.id;
@@ -142,13 +138,11 @@ function buildSummaryDashboard() {
       var cachedStr = props.getProperty(propKey);
 
       if (cachedStr) {
-        // INSTANT 0ms REUSE FROM PERSISTENT STORAGE
         var cachedData = JSON.parse(cachedStr);
         baseModel = cachedData.baseModel;
         bomRev = cachedData.bomRev;
         expectedSerials = cachedData.expectedSerials || [];
       } else if (uncachedOpenedCount < MAX_UNCACHED_OPENS) {
-        // OPEN UNCACHED FILE (CAPPED AT 4 PER RUN)
         uncachedOpenedCount++;
         var woSs = SpreadsheetApp.openById(fileId);
         var woSheet = woSs.getSheets()[0];
@@ -167,7 +161,6 @@ function buildSummaryDashboard() {
           }
         }
 
-        // PERMANENT COMPOUND CACHE
         var cachePayload = {
           baseModel: baseModel,
           bomRev: bomRev,
@@ -175,7 +168,6 @@ function buildSummaryDashboard() {
         };
         props.setProperty(propKey, JSON.stringify(cachePayload));
       } else {
-        // PLACEHOLDER UNTIL NEXT BATCH RUN
         baseModel = "PENDING CACHE";
         bomRev = "-";
       }
@@ -298,7 +290,7 @@ function buildSummaryDashboard() {
     }
   }
 
-  // STEP 5: Bulk Render Updated Table to Summary Sheet
+  // STEP 4: Render Table Starting Clean at WO 1608
   var maxRows = Math.max(summarySheet.getLastRow() - 1, 1);
   summarySheet.getRange(2, 1, maxRows, 8).clearContent().setBackground(null).setFontColor(null).setFontWeight("normal");
 
@@ -309,7 +301,7 @@ function buildSummaryDashboard() {
     targetRange.setFontColors(fontColors);
     targetRange.setFontWeights(fontWeights);
   } else {
-    summarySheet.getRange("A2").setValue("⚠️ No Work Orders matched starting threshold (WO >= " + minWoNumber + ").");
+    summarySheet.getRange("A2").setValue("⚠️ No Work Orders found matching baseline threshold (WO >= " + minWoNumber + ").");
   }
 }
 
