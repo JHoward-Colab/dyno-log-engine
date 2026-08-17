@@ -1,6 +1,6 @@
 // =========================================================================
 // 📊 SUMMARY DASHBOARD CONTROLLER (Summary.js)
-// Isolated Work Order Compiler, Progress Tracker & Interactive Navigator
+// High-Speed Incremental Work Order Compiler & Interactive Dashboard
 // =========================================================================
 
 /**
@@ -37,6 +37,7 @@ function robustExtractWoBatchNum(strVal) {
  * Rebuilds the Summary Dashboard tab incrementally starting at WO 1608 baseline.
  */
 function buildSummaryDashboard() {
+  var startTime = new Date().getTime();
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var summarySheet = ss.getSheetByName(CONFIG.SHEET_NAMES.SUMMARY);
   var logSheet = ss.getSheetByName(CONFIG.SHEET_NAMES.MASTER_DYNO_LOG);
@@ -62,6 +63,7 @@ function buildSummaryDashboard() {
   var sumCols = CONFIG.COLUMNS.SUMMARY || {};
 
   var BASELINE_WO_FLOOR = 1608;
+  var OPEN_TIME_BUDGET_MS = 8000; // 8-second execution budget for uncached file opens
 
   // STEP 1: Group ALL Dyno Runs by Serial Number (Preserving Chronological Order)
   var allRunsBySerial = {};
@@ -77,7 +79,11 @@ function buildSummaryDashboard() {
     }
   }
 
-  // STEP 2: Collect Work Order Drive Files
+  // STEP 2: Load ALL Script Properties into Memory Once (0ms In-Memory Lookups)
+  var propsService = PropertiesService.getScriptProperties();
+  var allProps = propsService.getProperties();
+
+  // STEP 3: Collect Work Order Drive Files
   var filesIterator = folder.getFiles();
   var fileList = [];
 
@@ -100,7 +106,7 @@ function buildSummaryDashboard() {
     });
   }
 
-  // STEP 3: Sort Files Ascending (1608, 1609, 1610...)
+  // STEP 4: Sort Files Ascending (1608, 1609, 1610...)
   fileList.sort(function(a, b) {
     if (a.woNum !== b.woNum && a.woNum > 0 && b.woNum > 0) {
       return a.woNum - b.woNum;
@@ -108,16 +114,12 @@ function buildSummaryDashboard() {
     return a.name.localeCompare(b.name);
   });
 
-  var props = PropertiesService.getScriptProperties();
-  var uncachedOpenedCount = 0;
-  var MAX_UNCACHED_OPENS = 5;
-
   var tableOutput = [];
   var bgColors = [];
   var fontColors = [];
   var fontWeights = [];
 
-  // STEP 4: Process Work Orders
+  // STEP 5: Process Work Orders with Dynamic Time Budgeting
   for (var i = 0; i < fileList.length; i++) {
     var item = fileList[i];
     var fileId = item.id;
@@ -133,15 +135,16 @@ function buildSummaryDashboard() {
       var expectedSerials = [];
 
       var propKey = "WO_META_" + fileId;
-      var cachedStr = props.getProperty(propKey);
+      var cachedStr = allProps[propKey];
 
       if (cachedStr) {
+        // INSTANT IN-MEMORY LOAD (0ms)
         var cachedData = JSON.parse(cachedStr);
-        baseModel = cachedData.baseModel;
-        bomRev = cachedData.bomRev;
-        expectedSerials = cachedData.expectedSerials || [];
-      } else if (uncachedOpenedCount < MAX_UNCACHED_OPENS) {
-        uncachedOpenedCount++;
+        baseModel = cachedData.bm || cachedData.baseModel || "";
+        bomRev = cachedData.br || cachedData.bomRev || "";
+        expectedSerials = cachedData.es || cachedData.expectedSerials || [];
+      } else if ((new Date().getTime() - startTime) < OPEN_TIME_BUDGET_MS) {
+        // TIME-BUDGETED UNCACHED FILE OPEN
         var woSs = SpreadsheetApp.openById(fileId);
         var woSheet = woSs.getSheets()[0];
 
@@ -159,13 +162,17 @@ function buildSummaryDashboard() {
           }
         }
 
+        // SAVE COMPACT PAYLOAD TO PRESERVE QUOTA
         var cachePayload = {
-          baseModel: baseModel,
-          bomRev: bomRev,
-          expectedSerials: expectedSerials
+          bm: baseModel,
+          br: bomRev,
+          es: expectedSerials
         };
-        props.setProperty(propKey, JSON.stringify(cachePayload));
+        var jsonPayload = JSON.stringify(cachePayload);
+        propsService.setProperty(propKey, jsonPayload);
+        allProps[propKey] = jsonPayload; // Keep local dictionary in sync
       } else {
+        // OVER TIME BUDGET -> DEFER TO NEXT BACKGROUND SYNC
         baseModel = "PENDING CACHE";
         bomRev = "-";
       }
@@ -186,14 +193,14 @@ function buildSummaryDashboard() {
         if (runs.length > 0) {
           testedCount++;
 
-          // 1. Evaluate First Pass Yield using Earliest Run (runs[0])
+          // 1. First Pass Yield (Earliest Dyno Run)
           var firstRun = runs[0];
           var firstOverall = String(firstRun[(logCols.OVERALL_STATUS || 21) - 1] || "").toUpperCase();
           if (firstOverall.includes("PASS")) {
             firstPassCount++;
           }
 
-          // 2. Evaluate Current WO Status using Latest Run (runs[runs.length - 1])
+          // 2. Current WO Status (Latest Dyno Run)
           var latestRun = runs[runs.length - 1];
           var latestOverall = String(latestRun[(logCols.OVERALL_STATUS || 21) - 1] || "").toUpperCase();
           var latestDiag = String(latestRun[(logCols.DIAGNOSTICS || 22) - 1] || "");
@@ -285,7 +292,7 @@ function buildSummaryDashboard() {
     }
   }
 
-  // STEP 5: Render Table
+  // STEP 6: Consolidated Range Clear & Bulk Render
   var maxRows = Math.max(summarySheet.getLastRow() - 1, 1);
   summarySheet.getRange(2, 1, maxRows, 8).clearContent().setBackground(null).setFontColor(null).setFontWeight("normal");
 
@@ -295,7 +302,23 @@ function buildSummaryDashboard() {
     targetRange.setBackgrounds(bgColors);
     targetRange.setFontColors(fontColors);
     targetRange.setFontWeights(fontWeights);
+  } else {
+    summarySheet.getRange("A2").setValue("⚠️ No Work Orders found matching baseline threshold (WO >= " + minWoNumber + ").");
   }
+}
+
+/**
+ * Utility helper to clear persistent WO metadata properties if files are modified.
+ */
+function clearWoSummaryCache() {
+  var props = PropertiesService.getScriptProperties();
+  var keys = props.getKeys();
+  for (var i = 0; i < keys.length; i++) {
+    if (keys[i].indexOf("WO_META_") === 0) {
+      props.deleteProperty(keys[i]);
+    }
+  }
+  Logger.log("Summary persistent metadata cache cleared.");
 }
 
 /**
@@ -310,7 +333,6 @@ function onSelectionChange(e) {
   var col = e.range.getColumn();
   var row = e.range.getRow();
 
-  // Trigger on Column A (Status) or Column B (WO Number) for rows > 1
   if (sheet.getName() === CONFIG.SHEET_NAMES.SUMMARY && (col === 1 || col === 2) && row > 1) {
     var rawVal = String(sheet.getRange(row, 2).getValue()).trim();
     if (!rawVal || rawVal.startsWith("⚠️") || rawVal.startsWith("❌")) return;
