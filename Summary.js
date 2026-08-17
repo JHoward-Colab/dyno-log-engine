@@ -1,14 +1,18 @@
 // =========================================================================
 // 📊 SUMMARY DASHBOARD CONTROLLER (Summary.js)
-// Registry-Filtered, Chronological Strict-Match Serial Engine
+// Registry-Filtered, UI.js Cell A8 Mirroring Serial Engine
 // =========================================================================
 
-function cleanKey(str) {
-  return String(str || "").toUpperCase().replace(/[^A-Z0-9]/g, "").trim();
+/**
+ * Normalizes string keys (Mirrors UI.js cleanKey).
+ */
+function cleanKey(val) {
+  if (val === null || val === undefined) return "";
+  return String(val).toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
 /**
- * Robustly extracts pure WO batch number from barcodes, short serials, or file names.
+ * Robustly extracts pure WO batch number from barcodes or file names.
  */
 function robustExtractWoBatchNum(strVal) {
   var s = String(strVal || "").trim();
@@ -31,6 +35,33 @@ function robustExtractWoBatchNum(strVal) {
 
   var match = s.match(/\b\d{4,6}\b/) || s.match(/\d{4,6}/);
   return match ? (parseInt(match[0], 10) || 0) : (parseInt(cleanDigits, 10) || 0);
+}
+
+/**
+ * Robust Serial Matcher copied directly from UI.js.
+ */
+function isSerialMatch(expSerial, logSerial) {
+  var cExp = cleanKey(expSerial);
+  var cLog = cleanKey(logSerial);
+  if (!cExp || !cLog) return false;
+
+  if (cExp === cLog) return true;
+  if (cExp.endsWith(cLog) || cLog.endsWith(cExp)) return true;
+
+  var cLogNoZero = cLog.replace(/^0+/, "");
+  var cExpNoZero = cExp.replace(/^0+/, "");
+  if (cExp.endsWith(cLogNoZero) || cLog.endsWith(cExpNoZero)) return true;
+
+  if (cExp.length >= 6 && cLog.length >= 3) {
+    var expUnit = cExp.slice(-3);
+    var logUnit = cLog.slice(-3);
+    if (expUnit === logUnit) {
+      var logBatch = cLog.slice(0, -3).replace(/^0+/, "");
+      if (logBatch && cExp.indexOf(logBatch) !== -1) return true;
+    }
+  }
+
+  return false;
 }
 
 function isValidCache(jsonStr) {
@@ -63,7 +94,7 @@ function getValidRegistryModels(ss) {
 
   for (var r = 1; r < regData.length; r++) {
     var bmVal = String(regData[r][bmColIdx] || "").trim().toUpperCase();
-    if (bmVal) validBaseModels[bmVal] = true;
+    if (bmVal) validBaseModels[cleanKey(bmVal)] = true;
   }
   return validBaseModels;
 }
@@ -128,7 +159,7 @@ function runFullSystemIndexer() {
       var bomRev = String(woSheet.getRange("D4").getValue()).trim();
       var expectedSerials = [];
 
-      var isTrackedPart = (Object.keys(validModels).length === 0) || validModels[baseModel.toUpperCase()];
+      var isTrackedPart = (Object.keys(validModels).length === 0) || validModels[cleanKey(baseModel)];
 
       if (isTrackedPart) {
         var woLastRow = woSheet.getLastRow();
@@ -159,6 +190,9 @@ function runFullSystemIndexer() {
   SpreadsheetApp.flush();
 }
 
+/**
+ * Builds Summary Dashboard mirroring UI.js cell A8 decision logic.
+ */
 function buildSummaryDashboard() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var summarySheet = ss.getSheetByName(CONFIG.SHEET_NAMES.SUMMARY);
@@ -184,48 +218,40 @@ function buildSummaryDashboard() {
 
   var BASELINE_WO_FLOOR = 1608;
 
-  // STEP 1: Strict Column Index Resolution (Prioritize CONFIG, then Exact Header Match)
-  var colTrueSerial = (logCols.TRUE_SERIAL || 3) - 1;
-  var colOverallStatus = (logCols.OVERALL_STATUS || 21) - 1;
-  var colDiagnostics = (logCols.DIAGNOSTICS || 22) - 1;
-  var colTimestamp = (logCols.TIMESTAMP || 1) - 1;
+  // Header Auto-Detection (Col G = Test 1, Col H = Test 2, Col I = Overall)
+  var colTrueSerial    = (logCols.TRUE_SERIAL || 3) - 1;
+  var colBaseModel     = (logCols.BASE_MODEL || 4) - 1;
+  var colTest1Status   = 6;  // Col G
+  var colTest2Status   = 7;  // Col H
+  var colOverallStatus = (logCols.OVERALL_STATUS || 9) - 1; // Col I
+  var colDiagnostics   = (logCols.DIAGNOSTICS || 11) - 1;   // Col K
+  var colTimestamp     = (logCols.TIMESTAMP || 1) - 1;     // Col A
 
   var logHeaders = logData[0] || [];
-  if (logHeaders.length > 0) {
-    for (var c = 0; c < logHeaders.length; c++) {
-      var hClean = String(logHeaders[c]).toUpperCase().trim().replace(/[^A-Z0-9_]/g, "");
-      if (hClean === "TRUE_SERIAL" || hClean === "TRUESERIAL") colTrueSerial = c;
-      if (hClean === "OVERALL_STATUS" || hClean === "OVERALLSTATUS") colOverallStatus = c;
-      if (hClean === "DIAGNOSTICS") colDiagnostics = c;
-      if (hClean === "TIMESTAMP" || hClean === "TEST_TIMESTAMP") colTimestamp = c;
-    }
+  for (var c = 0; c < logHeaders.length; c++) {
+    var hText = String(logHeaders[c]).toUpperCase().trim();
+    if (hText.indexOf("TRUE_SERIAL") !== -1 || hText === "SERIAL") colTrueSerial = c;
+    if (hText.indexOf("TEST 1") !== -1 || hText.indexOf("TEST1") !== -1) colTest1Status = c;
+    if (hText.indexOf("TEST 2") !== -1 || hText.indexOf("TEST2") !== -1) colTest2Status = c;
+    if (hText.indexOf("OVERALL") !== -1) colOverallStatus = c;
+    if (hText.indexOf("DIAG") !== -1) colDiagnostics = c;
+    if (hText.indexOf("TIME") !== -1 || hText.indexOf("DATE") !== -1) colTimestamp = c;
   }
 
-  // STEP 2: Index Dyno Log strictly by Cleaned Serial Keys
-  var allRunsBySerial = {};
-  for (var r = 1; r < logData.length; r++) {
-    var rawSerial = String(logData[r][colTrueSerial] || "").trim();
-    if (rawSerial) {
-      var cSer = cleanKey(rawSerial);
-      if (!allRunsBySerial[cSer]) allRunsBySerial[cSer] = [];
-      allRunsBySerial[cSer].push(logData[r]);
-
-      if (cSer.length >= 3) {
-        var s3 = cSer.slice(-3);
-        var shortKey = "SHORT_" + s3;
-        if (!allRunsBySerial[shortKey]) allRunsBySerial[shortKey] = [];
-        allRunsBySerial[shortKey].push(logData[r]);
+  // Group latest runs by serial
+  var latestLogBySerial = {};
+  if (logData.length > 1) {
+    for (var r = 1; r < logData.length; r++) {
+      var row = logData[r];
+      var trueSerial = String(row[colTrueSerial] || "").trim();
+      if (trueSerial) {
+        var cSer = cleanKey(trueSerial);
+        latestLogBySerial[cSer] = {
+          data: row,
+          trueSerial: trueSerial
+        };
       }
     }
-  }
-
-  // STEP 3: Sort all serial runs chronologically by Timestamp
-  for (var key in allRunsBySerial) {
-    allRunsBySerial[key].sort(function(a, b) {
-      var tA = a[colTimestamp] instanceof Date ? a[colTimestamp].getTime() : (new Date(a[colTimestamp] || 0)).getTime();
-      var tB = b[colTimestamp] instanceof Date ? b[colTimestamp].getTime() : (new Date(b[colTimestamp] || 0)).getTime();
-      return tA - tB;
-    });
   }
 
   var propsService = PropertiesService.getScriptProperties();
@@ -281,107 +307,94 @@ function buildSummaryDashboard() {
     }
 
     if (baseModel === "IGNORED_PART") continue;
-    if (baseModel !== "PENDING CACHE" && Object.keys(validModels).length > 0 && !validModels[baseModel.toUpperCase()]) {
+    if (baseModel !== "PENDING CACHE" && Object.keys(validModels).length > 0 && !validModels[cleanKey(baseModel)]) {
       continue;
     }
 
     var totalQty = expectedSerials.length;
     var testedCount = 0;
-    var firstPassCount = 0;
-    var activeFailCount = 0;
-    var activeHoldCount = 0;
-    var activeCondCount = 0;
+    var untestedCount = 0;
+    var test1FailCount = 0;
+    var test2FailCount = 0;
+    var holdCount = 0;
     var activeFailureDetails = [];
     var lastDate = null;
-    var woNumClean = cleanKey(item.woNum || woNumber);
 
     for (var es = 0; es < expectedSerials.length; es++) {
       var expS = expectedSerials[es];
-      var cExp = cleanKey(expS);
+      var matchedLogItem = null;
 
-      // Multi-Tier Matching Engine
-      var runs = allRunsBySerial[cExp];
-
-      if (!runs || runs.length === 0) {
-        runs = allRunsBySerial[woNumClean + cExp] || allRunsBySerial["WO" + woNumClean + cExp];
-      }
-
-      // Suffix Fallback: Strict matching ONLY on the serial column itself
-      if (!runs || runs.length === 0) {
-        var expS3 = cExp.slice(-3);
-        if (expS3.length === 3) {
-          var potentialRuns = allRunsBySerial["SHORT_" + expS3] || [];
-          if (potentialRuns.length > 0) {
-            runs = potentialRuns.filter(function(runRow) {
-              var rowSerialClean = cleanKey(runRow[colTrueSerial]);
-              return rowSerialClean.indexOf(woNumClean) !== -1;
-            });
-          }
+      var logSerialKeys = Object.keys(latestLogBySerial);
+      for (var lIdx = 0; lIdx < logSerialKeys.length; lIdx++) {
+        var logKey = logSerialKeys[lIdx];
+        var logItem = latestLogBySerial[logKey];
+        if (isSerialMatch(expS, logItem.trueSerial)) {
+          matchedLogItem = logItem;
+          break;
         }
       }
 
-      if (runs && runs.length > 0) {
+      if (matchedLogItem) {
         testedCount++;
+        var row = matchedLogItem.data;
 
-        // First Pass Yield evaluation
-        var firstRun = runs[0];
-        var firstOverall = String(firstRun[colOverallStatus] || "").toUpperCase();
-        if (firstOverall.includes("PASS") && !firstOverall.includes("COND") && !firstOverall.includes("FAIL")) {
-          firstPassCount++;
-        }
-
-        // Chronologically Latest Run Evaluation
-        var latestRun = runs[runs.length - 1];
-        var latestOverall = String(latestRun[colOverallStatus] || "").toUpperCase().trim();
-        var latestDiag = String(latestRun[colDiagnostics] || "").toUpperCase().trim();
-        var runDate = latestRun[colTimestamp];
+        var t1Status    = String(row[colTest1Status] || "").trim().toUpperCase();
+        var t2Status    = String(row[colTest2Status] || "").trim().toUpperCase();
+        var overallStat = String(row[colOverallStatus] || "").trim().toUpperCase();
+        var diagnostics = String(row[colDiagnostics] || "").trim();
+        var runDate     = row[colTimestamp];
 
         if (runDate instanceof Date && (!lastDate || runDate > lastDate)) {
           lastDate = runDate;
         }
 
-        var isHold = latestOverall.indexOf("HOLD") !== -1 || latestDiag.indexOf("HOLD") !== -1;
-        var isCond = latestOverall.indexOf("COND") !== -1 || latestDiag.indexOf("COND") !== -1 || latestOverall.indexOf("DEVIAT") !== -1;
-        var isFail = !isCond && !isHold && (latestOverall.indexOf("FAIL") !== -1 || latestDiag.indexOf("FAIL") !== -1 || latestOverall.indexOf("REJECT") !== -1);
-
-        if (isHold) {
-          activeHoldCount++;
+        // Exact increment counters from renderOperatorTableWithFormatting() in UI.js
+        if (overallStat.includes("HOLD")) {
+          holdCount++;
           activeFailureDetails.push("#" + expS.slice(-3) + " [HOLD]");
-        } else if (isCond) {
-          activeCondCount++;
-          activeFailureDetails.push("#" + expS.slice(-3) + " [COND PASS]");
-        } else if (isFail) {
-          activeFailCount++;
-          var tagMatch = String(latestRun[colDiagnostics] || "").match(/\[(.*?)\]/);
-          activeFailureDetails.push("#" + expS.slice(-3) + " " + (tagMatch ? tagMatch[0] : "[FAIL]"));
         }
+        if (t1Status.includes("FAIL")) {
+          test1FailCount++;
+          var tagMatch = diagnostics.match(/\[(.*?)\]/);
+          activeFailureDetails.push("#" + expS.slice(-3) + " " + (tagMatch ? tagMatch[0] : "[T1 FAIL]"));
+        }
+        if (t2Status.includes("FAIL")) {
+          test2FailCount++;
+          var tagMatch2 = diagnostics.match(/\[(.*?)\]/);
+          activeFailureDetails.push("#" + expS.slice(-3) + " " + (tagMatch2 ? tagMatch2[0] : "[T2 OUTLIER]"));
+        }
+      } else {
+        untestedCount++;
       }
     }
 
+    // Exact Decision Logic from UI.js (renderOperatorTableWithFormatting / setA8Status)
     var woStatus = "PENDING";
     var statusBg = "#FCF3CF";
     var statusFont = "#B7950B";
 
+    var totalCount = totalQty;
+
     if (baseModel === "PENDING CACHE") {
       woStatus = "PENDING"; statusBg = "#FCF3CF"; statusFont = "#B7950B";
-    } else if (totalQty === 0) {
+    } else if (totalCount === 0) {
       woStatus = "NO SERIALS"; statusBg = "#F2F4F4"; statusFont = "#5D6D7E";
     } else if (testedCount === 0) {
       woStatus = "PENDING"; statusBg = "#FCF3CF"; statusFont = "#B7950B";
-    } else if (activeHoldCount > 0) {
-      woStatus = "HOLD"; statusBg = "#FCF3CF"; statusFont = "#B7950B";
-    } else if (activeFailCount > 0) {
-      woStatus = "ACTION REQUIRED"; statusBg = "#FADBD8"; statusFont = "#C0392B";
-    } else if (activeCondCount > 0) {
-      woStatus = "CONDITIONAL PASS"; statusBg = "#FDEBD0"; statusFont = "#B9770E";
-    } else if (testedCount < totalQty) {
+    } else if (untestedCount > 0) {
       woStatus = "INCOMPLETE"; statusBg = "#FCF3CF"; statusFont = "#B7950B";
+    } else if (holdCount > 0) {
+      woStatus = "HOLD"; statusBg = "#FCF3CF"; statusFont = "#B7950B";
+    } else if (test1FailCount > 0) {
+      woStatus = "ACTION REQUIRED"; statusBg = "#FADBD8"; statusFont = "#C0392B";
+    } else if (test2FailCount > 0) {
+      woStatus = "CONDITIONAL PASS"; statusBg = "#FDEBD0"; statusFont = "#B9770E";
     } else {
       woStatus = "COMPLETED"; statusBg = "#D4EFDF"; statusFont = "#196F3D";
     }
 
     var progressStr = (baseModel === "PENDING CACHE") ? "Indexing..." : testedCount + " / " + totalQty + " (" + (totalQty > 0 ? Math.round((testedCount / totalQty) * 100) : 0) + "%)";
-    var fpyStr = testedCount > 0 ? ((firstPassCount / testedCount) * 100).toFixed(1) + "%" : "N/A";
+    var fpyStr = testedCount > 0 ? (((testedCount - test1FailCount) / testedCount) * 100).toFixed(1) + "%" : "N/A";
     var dateStr = lastDate ? Utilities.formatDate(lastDate, Session.getScriptTimeZone(), "yyyy-MM-dd HH:mm") : "N/A";
     var detailsStr = activeFailureDetails.length > 0 ? activeFailureDetails.join(", ") : (testedCount === totalQty && totalQty > 0 ? "✅ All Units Passed" : "⏳ Pending dyno test");
 
@@ -424,7 +437,7 @@ function clearWoSummaryCache() {
 
 /**
  * Interactive Column 1 Click Navigator.
- * Populates pure numeric batch digits (e.g., 1905, 1920) directly into cell C3.
+ * Populates pure numeric batch digits (e.g. 1905) into cell C3.
  */
 function onSelectionChange(e) {
   if (!e || !e.range) return;
