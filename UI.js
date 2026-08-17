@@ -36,6 +36,29 @@ function cleanKey(val) {
 }
 
 /**
+ * Helper to convert long WO barcodes (43081008001979001) into standard short serials (001979-001).
+ */
+function formatShortSerial(rawSerial, searchBarcode) {
+  var str = String(rawSerial || "").trim();
+  if (!str) return "";
+
+  if (str.includes("-")) return str;
+
+  if (str.length >= 3) {
+    var unit = str.slice(-3);
+    var batch = searchBarcode ? String(searchBarcode).trim() : "";
+    if (batch.includes("-")) batch = batch.split("-")[0];
+    if (batch.includes("_")) batch = batch.split("_")[0];
+    if (!isNaN(batch) && batch.length === 4) batch = "00" + batch;
+
+    if (batch) {
+      return batch + "-" + unit;
+    }
+  }
+  return str;
+}
+
+/**
  * Robust Serial Matcher between Work Order barcodes (e.g. 43081008001979001) and Dyno Log serials (e.g. 001979-001).
  */
 function isSerialMatch(expSerial, logSerial) {
@@ -50,7 +73,6 @@ function isSerialMatch(expSerial, logSerial) {
   var cExpNoZero = cExp.replace(/^0+/, "");
   if (cExp.endsWith(cLogNoZero) || cLog.endsWith(cExpNoZero)) return true;
 
-  // Match unit suffix (last 3 digits) and Work Order batch digits
   if (cExp.length >= 6 && cLog.length >= 3) {
     var expUnit = cExp.slice(-3);
     var logUnit = cLog.slice(-3);
@@ -330,7 +352,6 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber,
     }
   }
 
-  // Cross-reference expected Work Order serials against tested Dyno Log serials using fuzzy matching
   var itemsToProcess = [];
   var matchedLogKeys = {};
 
@@ -352,14 +373,14 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber,
 
       if (matchedLogItem) {
         itemsToProcess.push({
-          trueSerial: matchedLogItem.trueSerial,
+          rawSerial: matchedLogItem.trueSerial,
           isTested: true,
           data: matchedLogItem.data,
           rowIdx: matchedLogItem.rowIdx
         });
       } else {
         itemsToProcess.push({
-          trueSerial: expSerial,
+          rawSerial: expSerial,
           isTested: false,
           data: null,
           rowIdx: -1
@@ -368,13 +389,12 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber,
     }
   }
 
-  // Append any extra tested dyno log serials not found in expectedSerials
   var logSerialKeys = Object.keys(latestLogBySerial);
   for (var lIdx = 0; lIdx < logSerialKeys.length; lIdx++) {
     var k = logSerialKeys[lIdx];
     if (!matchedLogKeys[k]) {
       itemsToProcess.push({
-        trueSerial: latestLogBySerial[k].trueSerial,
+        rawSerial: latestLogBySerial[k].trueSerial,
         isTested: true,
         data: latestLogBySerial[k].data,
         rowIdx: latestLogBySerial[k].rowIdx
@@ -382,10 +402,9 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber,
     }
   }
 
-  // Sort items numerically by serial suffix
   itemsToProcess.sort(function(a, b) {
-    var mA = String(a.trueSerial).match(/(\d+)$/);
-    var mB = String(b.trueSerial).match(/(\d+)$/);
+    var mA = String(a.rawSerial).match(/(\d+)$/);
+    var mB = String(b.rawSerial).match(/(\d+)$/);
     var uA = mA ? parseInt(mA[1], 10) : 0;
     var uB = mB ? parseInt(mB[1], 10) : 0;
     return uA - uB;
@@ -400,7 +419,7 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber,
 
   for (var i = 0; i < itemsToProcess.length; i++) {
     var item = itemsToProcess[i];
-    var trueSerial = item.trueSerial;
+    var displaySerial = formatShortSerial(item.rawSerial, searchBarcode);
 
     if (item.isTested) {
       testedCount++;
@@ -408,7 +427,7 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber,
       var actualSheetRow = item.rowIdx;
 
       var rowLink = "#gid=" + logSheetId + "&range=A" + actualSheetRow;
-      var serialHyperlinkFormula = '=HYPERLINK("' + rowLink + '", "' + trueSerial + '")';
+      var serialHyperlinkFormula = '=HYPERLINK("' + rowLink + '", "' + displaySerial + '")';
 
       var t1Status    = String(row[hMap.test1Status] || "").trim();
       var t2Status    = String(row[hMap.test2Status] || "").trim();
@@ -422,7 +441,7 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber,
       if (t2Status.toUpperCase().includes("FAIL")) test2FailCount++;
 
       var mappedRow = [
-        serialHyperlinkFormula,                           // Col A (1): Serial
+        serialHyperlinkFormula,                           // Col A (1): Standardized Short Serial
         safeAbsNum(getLogVal(row, logCols.ROD_FORCE, 5)), // Col B (2): Rod Force
         safeAbsNum(getLogVal(row, logCols.COMP_1, 7)),    // Col C (3): Low Speed Comp
         safeAbsNum(getLogVal(row, logCols.REB_1, 8)),     // Col D (4): Low Speed Reb
@@ -439,7 +458,7 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber,
     } else {
       untestedCount++;
       var mappedRow = [
-        trueSerial,                                       // Col A (1): Serial
+        displaySerial,                                    // Col A (1): Standardized Short Serial
         "",                                               // Col B (2): Rod Force
         "",                                               // Col C (3): Low Speed Comp
         "",                                               // Col D (4): Low Speed Reb
