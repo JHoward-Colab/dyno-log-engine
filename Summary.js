@@ -1,6 +1,6 @@
 // =========================================================================
 // 📊 SUMMARY DASHBOARD CONTROLLER (Summary.js)
-// Registry-Filtered, Strict Candidate Matching Serial Engine
+// Registry-Filtered, Chronological Strict-Match Serial Engine
 // =========================================================================
 
 function cleanKey(str) {
@@ -31,34 +31,6 @@ function robustExtractWoBatchNum(strVal) {
 
   var match = s.match(/\b\d{4,6}\b/) || s.match(/\d{4,6}/);
   return match ? (parseInt(match[0], 10) || 0) : (parseInt(cleanDigits, 10) || 0);
-}
-
-/**
- * Generates strict candidate serial lookup keys to prevent false positive matches
- * against timestamps, diagnostic notes, or unrelated work orders.
- */
-function getCandidateSerialKeys(expSerial, woNum) {
-  var candidates = [];
-  var cExp = cleanKey(expSerial);
-  if (!cExp) return candidates;
-
-  candidates.push(cExp);
-
-  var cWo = cleanKey(woNum);
-  if (cWo) {
-    if (!cExp.startsWith(cWo) && !cExp.startsWith("WO" + cWo)) {
-      candidates.push(cWo + cExp);
-      candidates.push("WO" + cWo + cExp);
-    }
-    if (cExp.startsWith(cWo)) {
-      candidates.push("WO" + cExp);
-    }
-    if (cExp.startsWith("WO" + cWo)) {
-      candidates.push(cExp.replace(/^WO/, ""));
-    }
-  }
-
-  return candidates;
 }
 
 function isValidCache(jsonStr) {
@@ -212,22 +184,24 @@ function buildSummaryDashboard() {
 
   var BASELINE_WO_FLOOR = 1608;
 
-  // STEP 1: Auto-Detect Column Indices
-  var logHeaders = logData[0] || [];
+  // STEP 1: Strict Column Index Resolution (Prioritize CONFIG, then Exact Header Match)
   var colTrueSerial = (logCols.TRUE_SERIAL || 3) - 1;
   var colOverallStatus = (logCols.OVERALL_STATUS || 21) - 1;
   var colDiagnostics = (logCols.DIAGNOSTICS || 22) - 1;
   var colTimestamp = (logCols.TIMESTAMP || 1) - 1;
 
-  for (var c = 0; c < logHeaders.length; c++) {
-    var hText = String(logHeaders[c]).toUpperCase().trim();
-    if (hText.indexOf("TRUE_SERIAL") !== -1 || hText === "SERIAL") colTrueSerial = c;
-    if (hText.indexOf("OVERALL") !== -1) colOverallStatus = c;
-    if (hText.indexOf("DIAG") !== -1) colDiagnostics = c;
-    if (hText.indexOf("TIME") !== -1 || hText.indexOf("DATE") !== -1) colTimestamp = c;
+  var logHeaders = logData[0] || [];
+  if (logHeaders.length > 0) {
+    for (var c = 0; c < logHeaders.length; c++) {
+      var hClean = String(logHeaders[c]).toUpperCase().trim().replace(/[^A-Z0-9_]/g, "");
+      if (hClean === "TRUE_SERIAL" || hClean === "TRUESERIAL") colTrueSerial = c;
+      if (hClean === "OVERALL_STATUS" || hClean === "OVERALLSTATUS") colOverallStatus = c;
+      if (hClean === "DIAGNOSTICS") colDiagnostics = c;
+      if (hClean === "TIMESTAMP" || hClean === "TEST_TIMESTAMP") colTimestamp = c;
+    }
   }
 
-  // STEP 2: Index Master Dyno Log strictly by Cleaned TRUE_SERIAL Keys
+  // STEP 2: Index Dyno Log strictly by Cleaned Serial Keys
   var allRunsBySerial = {};
   for (var r = 1; r < logData.length; r++) {
     var rawSerial = String(logData[r][colTrueSerial] || "").trim();
@@ -235,6 +209,13 @@ function buildSummaryDashboard() {
       var cSer = cleanKey(rawSerial);
       if (!allRunsBySerial[cSer]) allRunsBySerial[cSer] = [];
       allRunsBySerial[cSer].push(logData[r]);
+
+      if (cSer.length >= 3) {
+        var s3 = cSer.slice(-3);
+        var shortKey = "SHORT_" + s3;
+        if (!allRunsBySerial[shortKey]) allRunsBySerial[shortKey] = [];
+        allRunsBySerial[shortKey].push(logData[r]);
+      }
     }
   }
 
@@ -312,25 +293,37 @@ function buildSummaryDashboard() {
     var activeCondCount = 0;
     var activeFailureDetails = [];
     var lastDate = null;
+    var woNumClean = cleanKey(item.woNum || woNumber);
 
     for (var es = 0; es < expectedSerials.length; es++) {
       var expS = expectedSerials[es];
-      
-      // Candidate Serial Key Resolution
-      var keysToTry = getCandidateSerialKeys(expS, item.woNum || woNumber);
-      var runs = null;
+      var cExp = cleanKey(expS);
 
-      for (var k = 0; k < keysToTry.length; k++) {
-        if (allRunsBySerial[keysToTry[k]] && allRunsBySerial[keysToTry[k]].length > 0) {
-          runs = allRunsBySerial[keysToTry[k]];
-          break;
+      // Multi-Tier Matching Engine
+      var runs = allRunsBySerial[cExp];
+
+      if (!runs || runs.length === 0) {
+        runs = allRunsBySerial[woNumClean + cExp] || allRunsBySerial["WO" + woNumClean + cExp];
+      }
+
+      // Suffix Fallback: Strict matching ONLY on the serial column itself
+      if (!runs || runs.length === 0) {
+        var expS3 = cExp.slice(-3);
+        if (expS3.length === 3) {
+          var potentialRuns = allRunsBySerial["SHORT_" + expS3] || [];
+          if (potentialRuns.length > 0) {
+            runs = potentialRuns.filter(function(runRow) {
+              var rowSerialClean = cleanKey(runRow[colTrueSerial]);
+              return rowSerialClean.indexOf(woNumClean) !== -1;
+            });
+          }
         }
       }
 
       if (runs && runs.length > 0) {
         testedCount++;
 
-        // Evaluate First Pass Yield
+        // First Pass Yield evaluation
         var firstRun = runs[0];
         var firstOverall = String(firstRun[colOverallStatus] || "").toUpperCase();
         if (firstOverall.includes("PASS") && !firstOverall.includes("COND") && !firstOverall.includes("FAIL")) {
@@ -431,7 +424,7 @@ function clearWoSummaryCache() {
 
 /**
  * Interactive Column 1 Click Navigator.
- * Populates pure numeric batch digits directly into cell C3.
+ * Populates pure numeric batch digits (e.g., 1905, 1920) directly into cell C3.
  */
 function onSelectionChange(e) {
   if (!e || !e.range) return;
