@@ -57,7 +57,7 @@ function buildSummaryDashboard() {
   var logCols = CONFIG.COLUMNS.MASTER_DYNO_LOG || {};
   var sumCols = CONFIG.COLUMNS.SUMMARY || {};
 
-  // STEP 1: Determine Lowest Active WO Number in Master_Dyno_Log and Index Serials
+  // STEP 1: Determine Earliest WO Number in Master_Dyno_Log & Index Serials
   var minWoNumber = 999999;
   var logMapByCleanSerial = {};
   var logSerialsList = [];
@@ -78,7 +78,7 @@ function buildSummaryDashboard() {
 
   if (minWoNumber === 999999) minWoNumber = 0;
 
-  // STEP 2: Collect & Sort Drive Files by Last Updated (Newest First)
+  // STEP 2: Collect Drive Files & Filter Legacy Files Older Than Baseline
   var filesIterator = folder.searchFiles("mimeType = '" + MimeType.GOOGLE_SHEETS + "' and trashed = false");
   var fileList = [];
 
@@ -87,7 +87,7 @@ function buildSummaryDashboard() {
     var fName = f.getName();
     var fWoNum = extractWoBatchNum(fName);
 
-    // Instant Cutoff Filter: Skip legacy files older than lowest dyno log WO
+    // Filter out legacy files before baseline WO
     if (fWoNum > 0 && minWoNumber > 0 && fWoNum < minWoNumber) {
       continue;
     }
@@ -96,13 +96,18 @@ function buildSummaryDashboard() {
       file: f,
       id: f.getId(),
       name: fName,
+      woNum: fWoNum,
       lastUpdated: f.getLastUpdated().getTime()
     });
   }
 
-  // Sort newest files first and cap processing pool to top 25 recent Work Orders
-  fileList.sort(function(a, b) { return b.lastUpdated - a.lastUpdated; });
-  var processList = fileList.slice(0, 25);
+  // STEP 3: Sort Files by Work Order Serial Number in Ascending Order (1979, 1980, 1981...)
+  fileList.sort(function(a, b) {
+    if (a.woNum !== b.woNum && a.woNum > 0 && b.woNum > 0) {
+      return a.woNum - b.woNum;
+    }
+    return a.name.localeCompare(b.name);
+  });
 
   var cache = CacheService.getScriptCache();
   var tableOutput = [];
@@ -110,14 +115,14 @@ function buildSummaryDashboard() {
   var fontColors = [];
   var fontWeights = [];
 
-  // STEP 3: Time-Guarded Processing Loop (Max 12 Seconds)
-  for (var i = 0; i < processList.length; i++) {
+  // STEP 4: Process Sorted Work Orders (Time-Guarded for Max 12 Seconds)
+  for (var i = 0; i < fileList.length; i++) {
     if ((new Date().getTime() - startTime) > 12000) {
       Logger.log("Time guard reached (12s). Rendering current " + tableOutput.length + " Work Orders.");
-      break; // Exit loop safely to guarantee rendering before execution timeout
+      break;
     }
 
-    var item = processList[i];
+    var item = fileList[i];
     var fileId = item.id;
     var fileName = item.name;
     var woNumber = fileName.replace(/\.[^/.]+$/, "").trim();
@@ -158,7 +163,7 @@ function buildSummaryDashboard() {
           bomRev: bomRev,
           expectedSerials: expectedSerials
         };
-        cache.put(cacheKey, JSON.stringify(cachePayload), 21600); // Cache for 6 hours
+        cache.put(cacheKey, JSON.stringify(cachePayload), 21600);
       }
 
       var totalQty = expectedSerials.length;
@@ -275,7 +280,7 @@ function buildSummaryDashboard() {
     }
   }
 
-  // STEP 4: Bulk Render Table to Summary Sheet
+  // STEP 5: Bulk Render Table to Summary Sheet
   var maxRows = Math.max(summarySheet.getLastRow() - 1, 1);
   summarySheet.getRange(2, 1, maxRows, 8).clearContent().setBackground(null).setFontColor(null).setFontWeight("normal");
 
