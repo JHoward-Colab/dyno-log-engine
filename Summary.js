@@ -114,7 +114,7 @@ function buildSummaryDashboard() {
 
   var props = PropertiesService.getScriptProperties();
   var uncachedOpenedCount = 0;
-  var MAX_UNCACHED_OPENS = 4; // Hard cap per execution to keep run time < 5s
+  var MAX_UNCACHED_OPENS = 12; // Hard cap per execution to keep run time < 5s
 
   var tableOutput = [];
   var bgColors = [];
