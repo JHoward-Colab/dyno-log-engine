@@ -135,6 +135,18 @@ const CONFIG = Object.freeze({
       RESULTS_START_COL: 1,
       RESULTS_COL_COUNT: 12
     })
+  })
+
+    SUMMARY: Object.freeze({
+      WORK_ORDER_STATUS: 1, // Col A
+      WORK_ORDER_NUMBER: 2, // Col B
+      BASE_MODEL: 3,        // Col C
+      BOM_REVISION: 4,      // Col D
+      TESTING_PROGRESS: 5,  // Col E
+      STATUS_DETAILS: 6,    // Col F
+      FIRST_PASS_YIELD: 7,  // Col G
+      LAST_TESTED_DATE: 8   // Col H
+    })
   }),
 
   STATUS: Object.freeze({
@@ -156,4 +168,19 @@ const CONFIG = Object.freeze({
     REB_2_FAIL: "[R2_FAIL]",
     SLOPE_FAIL: "[SLOPE_FAIL]"
   })
-});
+
+  // Add SUMMARY inside your existing SHEET_NAMES object:
+  SHEET_NAMES: Object.freeze({
+    MASTER_DYNO_LOG: "Master_Dyno_Log",
+    PART_REFERENCE_MATRIX: "Part_Reference_Matrix",
+    OPERATOR_STATION: "Operator_Station",
+    PROGRAM_REGISTRY: "Program_Registry",
+    SUMMARY: "Summary"  // <-- ADD THIS LINE
+  }),
+
+// Add WORK_ORDER_FOLDER_ID inside your existing FOLDERS object:
+  FOLDERS: Object.freeze({
+    WATCH_FOLDER: "01_Watch_Folder_DEV",
+    ARCHIVE_FOLDER: "02_Archive_DEV",
+    WORK_ORDER_FOLDER_ID: "1nNCOoZmTmNvyCELr9ZH4aM1FCWkouWC1" // <-- ADD THIS LINE
+  }),
