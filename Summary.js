@@ -33,6 +33,19 @@ function buildSummaryDashboard() {
   var logCols = CONFIG.COLUMNS.MASTER_DYNO_LOG || {};
   var sumCols = CONFIG.COLUMNS.SUMMARY || {};
 
+  // OPTIMIZATION: Index Master_Dyno_Log into Hash Map ONCE for O(1) instant lookups
+  var logMapByCleanSerial = {};
+  var logSerialsList = [];
+
+  for (var r = 1; r < logData.length; r++) {
+    var rawSerial = String(logData[r][(logCols.TRUE_SERIAL || 3) - 1] || "").trim();
+    if (rawSerial) {
+      var cSer = cleanKey(rawSerial);
+      logMapByCleanSerial[cSer] = logData[r];
+      logSerialsList.push({ clean: cSer, raw: rawSerial, row: logData[r] });
+    }
+  }
+
   var tableOutput = [];
   var bgColors = [];
   var fontColors = [];
@@ -73,20 +86,26 @@ function buildSummaryDashboard() {
       for (var es = 0; es < expectedSerials.length; es++) {
         var expS = expectedSerials[es];
         var matchedRun = null;
+        var cleanExp = cleanKey(expS);
 
-        for (var r = 1; r < logData.length; r++) {
-          var rowSerial = String(logData[r][logCols.TRUE_SERIAL - 1] || "").trim();
-          if (isSerialMatch(expS, rowSerial)) {
-            matchedRun = logData[r];
-            break;
+        // Fast Direct Lookup
+        if (logMapByCleanSerial[cleanExp]) {
+          matchedRun = logMapByCleanSerial[cleanExp];
+        } else {
+          // Suffix Fuzzy Lookup
+          for (var lIdx = 0; lIdx < logSerialsList.length; lIdx++) {
+            if (isSerialMatch(expS, logSerialsList[lIdx].raw)) {
+              matchedRun = logSerialsList[lIdx].row;
+              break;
+            }
           }
         }
 
         if (matchedRun) {
           testedCount++;
-          var overall = String(matchedRun[logCols.OVERALL_STATUS - 1] || "").toUpperCase();
-          var diag = String(matchedRun[logCols.DIAGNOSTICS - 1] || "");
-          var runDate = matchedRun[logCols.TIMESTAMP - 1];
+          var overall = String(matchedRun[(logCols.OVERALL_STATUS || 21) - 1] || "").toUpperCase();
+          var diag = String(matchedRun[(logCols.DIAGNOSTICS || 22) - 1] || "");
+          var runDate = matchedRun[(logCols.TIMESTAMP || 1) - 1];
 
           if (runDate instanceof Date && (!lastDate || runDate > lastDate)) {
             lastDate = runDate;
