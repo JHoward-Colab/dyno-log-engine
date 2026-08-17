@@ -1,12 +1,15 @@
 // =========================================================================
 // 📊 SUMMARY DASHBOARD CONTROLLER (Summary.js)
-// Registry-Filtered, Conditional-Pass Prioritized Serial Engine
+// Registry-Filtered, Chronological Strict-Match Serial Engine
 // =========================================================================
 
 function cleanKey(str) {
   return String(str || "").toUpperCase().replace(/[^A-Z0-9]/g, "").trim();
 }
 
+/**
+ * Robustly extracts pure WO batch number from barcodes, short serials, or file names.
+ */
 function robustExtractWoBatchNum(strVal) {
   var s = String(strVal || "").trim();
   if (!s) return 0;
@@ -164,7 +167,6 @@ function buildSummaryDashboard() {
   if (!summarySheet || !logSheet) return;
 
   var validModels = getValidRegistryModels(ss);
-
   var folderId = CONFIG.FOLDERS.WORK_ORDER_FOLDER_ID;
   if (!folderId) return;
 
@@ -182,6 +184,7 @@ function buildSummaryDashboard() {
 
   var BASELINE_WO_FLOOR = 1608;
 
+  // STEP 1: Broad Column Auto-Detection for Master Dyno Log
   var logHeaders = logData[0] || [];
   var colTrueSerial = (logCols.TRUE_SERIAL || 3) - 1;
   var colOverallStatus = (logCols.OVERALL_STATUS || 21) - 1;
@@ -190,12 +193,13 @@ function buildSummaryDashboard() {
 
   for (var c = 0; c < logHeaders.length; c++) {
     var hText = String(logHeaders[c]).toUpperCase().trim();
-    if (hText.indexOf("TRUE_SERIAL") !== -1 || hText === "SERIAL") colTrueSerial = c;
-    if (hText.indexOf("OVERALL") !== -1) colOverallStatus = c;
-    if (hText.indexOf("DIAG") !== -1) colDiagnostics = c;
+    if (hText.indexOf("TRUE_SERIAL") !== -1 || hText.indexOf("SERIAL") !== -1 || hText.indexOf("BARCODE") !== -1) colTrueSerial = c;
+    if (hText.indexOf("OVERALL") !== -1 || hText.indexOf("STATUS") !== -1 || hText.indexOf("RESULT") !== -1) colOverallStatus = c;
+    if (hText.indexOf("DIAG") !== -1 || hText.indexOf("FAIL") !== -1 || hText.indexOf("NOTE") !== -1) colDiagnostics = c;
     if (hText.indexOf("TIME") !== -1 || hText.indexOf("DATE") !== -1) colTimestamp = c;
   }
 
+  // STEP 2: Index Dyno Runs
   var allRunsBySerial = {};
   for (var r = 1; r < logData.length; r++) {
     var rawSerial = String(logData[r][colTrueSerial] || "").trim();
@@ -211,6 +215,15 @@ function buildSummaryDashboard() {
         allRunsBySerial[shortKey].push(logData[r]);
       }
     }
+  }
+
+  // STEP 3: Sort all serial runs chronologically by Timestamp
+  for (var key in allRunsBySerial) {
+    allRunsBySerial[key].sort(function(a, b) {
+      var tA = a[colTimestamp] instanceof Date ? a[colTimestamp].getTime() : (new Date(a[colTimestamp] || 0)).getTime();
+      var tB = b[colTimestamp] instanceof Date ? b[colTimestamp].getTime() : (new Date(b[colTimestamp] || 0)).getTime();
+      return tA - tB;
+    });
   }
 
   var propsService = PropertiesService.getScriptProperties();
@@ -306,32 +319,36 @@ function buildSummaryDashboard() {
       if (runs && runs.length > 0) {
         testedCount++;
 
-        // Evaluate First Pass Yield (Requires strict PASS without COND or FAIL)
+        // First Pass Yield evaluation
         var firstRun = runs[0];
         var firstOverall = String(firstRun[colOverallStatus] || "").toUpperCase();
         if (firstOverall.includes("PASS") && !firstOverall.includes("COND") && !firstOverall.includes("FAIL")) {
           firstPassCount++;
         }
 
+        // Guaranteed chronologically latest run
         var latestRun = runs[runs.length - 1];
-        var latestOverall = String(latestRun[colOverallStatus] || "").toUpperCase();
-        var latestDiag = String(latestRun[colDiagnostics] || "");
+        var latestOverall = String(latestRun[colOverallStatus] || "").toUpperCase().trim();
+        var latestDiag = String(latestRun[colDiagnostics] || "").toUpperCase().trim();
         var runDate = latestRun[colTimestamp];
 
         if (runDate instanceof Date && (!lastDate || runDate > lastDate)) {
           lastDate = runDate;
         }
 
-        // Status Categorization Order: HOLD -> CONDITIONAL -> HARD FAIL
-        if (latestOverall.includes("HOLD")) {
+        var isHold = latestOverall.indexOf("HOLD") !== -1 || latestDiag.indexOf("HOLD") !== -1;
+        var isCond = latestOverall.indexOf("COND") !== -1 || latestDiag.indexOf("COND") !== -1 || latestOverall.indexOf("DEVIAT") !== -1;
+        var isFail = !isCond && !isHold && (latestOverall.indexOf("FAIL") !== -1 || latestDiag.indexOf("FAIL") !== -1 || latestOverall.indexOf("REJECT") !== -1);
+
+        if (isHold) {
           activeHoldCount++;
           activeFailureDetails.push("#" + expS.slice(-3) + " [HOLD]");
-        } else if (latestOverall.includes("COND")) {
+        } else if (isCond) {
           activeCondCount++;
           activeFailureDetails.push("#" + expS.slice(-3) + " [COND PASS]");
-        } else if (latestOverall.includes("FAIL")) {
+        } else if (isFail) {
           activeFailCount++;
-          var tagMatch = latestDiag.match(/\[(.*?)\]/);
+          var tagMatch = String(latestRun[colDiagnostics] || "").match(/\[(.*?)\]/);
           activeFailureDetails.push("#" + expS.slice(-3) + " " + (tagMatch ? tagMatch[0] : "[FAIL]"));
         }
       }
@@ -401,6 +418,10 @@ function clearWoSummaryCache() {
   Logger.log("Summary persistent metadata cache cleared.");
 }
 
+/**
+ * Interactive Column 1 Click Navigator.
+ * Populates pure numeric batch digits (e.g., 1905, 1920) directly into cell C3.
+ */
 function onSelectionChange(e) {
   if (!e || !e.range) return;
   var range = e.range;
@@ -419,8 +440,6 @@ function onSelectionChange(e) {
       var woBatch = robustExtractWoBatchNum(rawVal);
       if (woBatch === 0) return;
 
-      var formattedBarcode = "WO-" + woBatch;
-
       var ss = e.source || SpreadsheetApp.getActiveSpreadsheet();
       var opSheet = ss.getSheetByName(CONFIG.SHEET_NAMES.OPERATOR_STATION);
 
@@ -428,8 +447,10 @@ function onSelectionChange(e) {
         var targetCellKey = (CONFIG.OPERATOR_STATION && CONFIG.OPERATOR_STATION.RANGES && CONFIG.OPERATOR_STATION.RANGES.BARCODE_INPUT) ? CONFIG.OPERATOR_STATION.RANGES.BARCODE_INPUT : "C3";
         var targetRange = opSheet.getRange(targetCellKey);
         
+        var pureBatchStr = String(woBatch);
+
         ss.setActiveSheet(opSheet);
-        targetRange.setValue(formattedBarcode);
+        targetRange.setValue(pureBatchStr);
         SpreadsheetApp.flush();
         
         if (typeof manageOperatorStation === "function") {
@@ -437,7 +458,7 @@ function onSelectionChange(e) {
             manageOperatorStation({
               source: ss,
               range: targetRange,
-              value: formattedBarcode,
+              value: pureBatchStr,
               oldValue: ""
             });
           } catch (err) {
