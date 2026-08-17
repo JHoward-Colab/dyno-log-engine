@@ -1,6 +1,6 @@
 // =========================================================================
 // 📊 SUMMARY DASHBOARD CONTROLLER (Summary.js)
-// Registry-Filtered, Conditional-Pass Aware, Strict-Match Serial Engine
+// Registry-Filtered, Conditional-Pass Prioritized Serial Engine
 // =========================================================================
 
 function cleanKey(str) {
@@ -306,10 +306,10 @@ function buildSummaryDashboard() {
       if (runs && runs.length > 0) {
         testedCount++;
 
-        // First Pass Yield evaluation (Strict clean pass without conditional flags)
+        // Evaluate First Pass Yield (Requires strict PASS without COND or FAIL)
         var firstRun = runs[0];
         var firstOverall = String(firstRun[colOverallStatus] || "").toUpperCase();
-        if (firstOverall.includes("PASS") && !firstOverall.includes("COND")) {
+        if (firstOverall.includes("PASS") && !firstOverall.includes("COND") && !firstOverall.includes("FAIL")) {
           firstPassCount++;
         }
 
@@ -322,16 +322,17 @@ function buildSummaryDashboard() {
           lastDate = runDate;
         }
 
+        // Status Categorization Order: HOLD -> CONDITIONAL -> HARD FAIL
         if (latestOverall.includes("HOLD")) {
           activeHoldCount++;
           activeFailureDetails.push("#" + expS.slice(-3) + " [HOLD]");
+        } else if (latestOverall.includes("COND")) {
+          activeCondCount++;
+          activeFailureDetails.push("#" + expS.slice(-3) + " [COND PASS]");
         } else if (latestOverall.includes("FAIL")) {
           activeFailCount++;
           var tagMatch = latestDiag.match(/\[(.*?)\]/);
           activeFailureDetails.push("#" + expS.slice(-3) + " " + (tagMatch ? tagMatch[0] : "[FAIL]"));
-        } else if (latestOverall.includes("COND")) {
-          activeCondCount++;
-          activeFailureDetails.push("#" + expS.slice(-3) + " [COND PASS]");
         }
       }
     }
