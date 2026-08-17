@@ -1,18 +1,12 @@
 // =========================================================================
 // 📊 SUMMARY DASHBOARD CONTROLLER (Summary.js)
-// Registry-Filtered, Strict-Match Serial Engine & Column 1 Click Navigator
+// Registry-Filtered, Conditional-Pass Aware, Strict-Match Serial Engine
 // =========================================================================
 
-/**
- * Standardized alphanumeric string cleaner.
- */
 function cleanKey(str) {
   return String(str || "").toUpperCase().replace(/[^A-Z0-9]/g, "").trim();
 }
 
-/**
- * Robustly extracts WO batch number from barcodes, short serials, or file names.
- */
 function robustExtractWoBatchNum(strVal) {
   var s = String(strVal || "").trim();
   if (!s) return 0;
@@ -36,9 +30,6 @@ function robustExtractWoBatchNum(strVal) {
   return match ? (parseInt(match[0], 10) || 0) : (parseInt(cleanDigits, 10) || 0);
 }
 
-/**
- * Validates whether cached JSON metadata contains real, indexed data.
- */
 function isValidCache(jsonStr) {
   if (!jsonStr) return false;
   try {
@@ -49,9 +40,6 @@ function isValidCache(jsonStr) {
   }
 }
 
-/**
- * Retrieves valid part numbers from Program_Registry to filter Work Orders.
- */
 function getValidRegistryModels(ss) {
   var validBaseModels = {};
   var registrySheet = ss.getSheetByName(CONFIG.SHEET_NAMES.PROGRAM_REGISTRY || "Program_Registry");
@@ -77,10 +65,6 @@ function getValidRegistryModels(ss) {
   return validBaseModels;
 }
 
-/**
- * One-Click Reset & Full Re-index
- * Flushes invalid/placeholder cache entries and forces clean indexing.
- */
 function resetAndReindexAll() {
   Logger.log("🧹 Clearing placeholder cache entries...");
   clearWoSummaryCache();
@@ -88,21 +72,15 @@ function resetAndReindexAll() {
   runFullSystemIndexer();
 }
 
-/**
- * Smart-Targeted Indexer with 4-Minute Safety Valve & Registry Filtering.
- */
 function runFullSystemIndexer() {
   var startTime = new Date().getTime();
-  var MAX_EXECUTION_TIME = 240000; // 4 minutes
+  var MAX_EXECUTION_TIME = 240000;
   
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var validModels = getValidRegistryModels(ss);
 
   var folderId = CONFIG.FOLDERS.WORK_ORDER_FOLDER_ID;
-  if (!folderId) {
-    Logger.log("❌ Error: WORK_ORDER_FOLDER_ID not set.");
-    return;
-  }
+  if (!folderId) return;
 
   var folder = DriveApp.getFolderById(folderId);
   var BASELINE_WO_FLOOR = 1608;
@@ -127,10 +105,7 @@ function runFullSystemIndexer() {
     }
   }
 
-  Logger.log("Found " + uncachedList.length + " Work Orders needing valid indexing.");
-
   if (uncachedList.length === 0) {
-    Logger.log("✅ All Work Orders are 100% validly indexed! Refreshing dashboard...");
     buildSummaryDashboard();
     return;
   }
@@ -139,11 +114,7 @@ function runFullSystemIndexer() {
 
   for (var i = 0; i < uncachedList.length; i++) {
     var elapsed = new Date().getTime() - startTime;
-    if (elapsed > MAX_EXECUTION_TIME) {
-      Logger.log("⏱️ 4-Minute Limit Reached. Validly indexed " + indexedThisRun + " files this run.");
-      Logger.log("⚠️ Click 'Run' again to continue indexing the remaining " + (uncachedList.length - indexedThisRun) + " files.");
-      break; 
-    }
+    if (elapsed > MAX_EXECUTION_TIME) break; 
 
     var item = uncachedList[i];
     try {
@@ -176,22 +147,15 @@ function runFullSystemIndexer() {
         var payloadStr = JSON.stringify({ bm: baseModel, br: bomRev, es: expectedSerials });
         propsService.setProperty("WO_META_" + item.id, payloadStr);
         indexedThisRun++;
-        Logger.log("Indexed (" + indexedThisRun + "/" + uncachedList.length + "): " + item.name + " -> " + baseModel);
       }
 
-    } catch (err) {
-      Logger.log("Failed to index " + item.name + ": " + err.toString());
-    }
+    } catch (err) {}
   }
 
-  Logger.log("Updating Summary tab dashboard...");
   buildSummaryDashboard();
   SpreadsheetApp.flush();
 }
 
-/**
- * Standard Dashboard Builder with Dynamic Registry Filtering.
- */
 function buildSummaryDashboard() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var summarySheet = ss.getSheetByName(CONFIG.SHEET_NAMES.SUMMARY);
@@ -311,6 +275,7 @@ function buildSummaryDashboard() {
     var firstPassCount = 0;
     var activeFailCount = 0;
     var activeHoldCount = 0;
+    var activeCondCount = 0;
     var activeFailureDetails = [];
     var lastDate = null;
     var woNumClean = cleanKey(item.woNum || woNumber);
@@ -341,8 +306,10 @@ function buildSummaryDashboard() {
       if (runs && runs.length > 0) {
         testedCount++;
 
+        // First Pass Yield evaluation (Strict clean pass without conditional flags)
         var firstRun = runs[0];
-        if (String(firstRun[colOverallStatus] || "").toUpperCase().includes("PASS")) {
+        var firstOverall = String(firstRun[colOverallStatus] || "").toUpperCase();
+        if (firstOverall.includes("PASS") && !firstOverall.includes("COND")) {
           firstPassCount++;
         }
 
@@ -362,6 +329,9 @@ function buildSummaryDashboard() {
           activeFailCount++;
           var tagMatch = latestDiag.match(/\[(.*?)\]/);
           activeFailureDetails.push("#" + expS.slice(-3) + " " + (tagMatch ? tagMatch[0] : "[FAIL]"));
+        } else if (latestOverall.includes("COND")) {
+          activeCondCount++;
+          activeFailureDetails.push("#" + expS.slice(-3) + " [COND PASS]");
         }
       }
     }
@@ -380,6 +350,8 @@ function buildSummaryDashboard() {
       woStatus = "HOLD"; statusBg = "#FCF3CF"; statusFont = "#B7950B";
     } else if (activeFailCount > 0) {
       woStatus = "ACTION REQUIRED"; statusBg = "#FADBD8"; statusFont = "#C0392B";
+    } else if (activeCondCount > 0) {
+      woStatus = "CONDITIONAL PASS"; statusBg = "#FDEBD0"; statusFont = "#B9770E";
     } else if (testedCount < totalQty) {
       woStatus = "INCOMPLETE"; statusBg = "#FCF3CF"; statusFont = "#B7950B";
     } else {
@@ -419,9 +391,6 @@ function buildSummaryDashboard() {
   }
 }
 
-/**
- * Flushes all cached metadata.
- */
 function clearWoSummaryCache() {
   var props = PropertiesService.getScriptProperties();
   var keys = props.getKeys();
@@ -431,11 +400,6 @@ function clearWoSummaryCache() {
   Logger.log("Summary persistent metadata cache cleared.");
 }
 
-/**
- * Interactive Column 1 Click Navigator.
- * Switches tab focus to Operator_Station, populates C3, flushes changes,
- * and executes manageOperatorStation smoothly.
- */
 function onSelectionChange(e) {
   if (!e || !e.range) return;
   var range = e.range;
@@ -454,6 +418,8 @@ function onSelectionChange(e) {
       var woBatch = robustExtractWoBatchNum(rawVal);
       if (woBatch === 0) return;
 
+      var formattedBarcode = "WO-" + woBatch;
+
       var ss = e.source || SpreadsheetApp.getActiveSpreadsheet();
       var opSheet = ss.getSheetByName(CONFIG.SHEET_NAMES.OPERATOR_STATION);
 
@@ -461,20 +427,16 @@ function onSelectionChange(e) {
         var targetCellKey = (CONFIG.OPERATOR_STATION && CONFIG.OPERATOR_STATION.RANGES && CONFIG.OPERATOR_STATION.RANGES.BARCODE_INPUT) ? CONFIG.OPERATOR_STATION.RANGES.BARCODE_INPUT : "C3";
         var targetRange = opSheet.getRange(targetCellKey);
         
-        // 1. Switch active sheet focus FIRST so manageOperatorStation targets the right context
         ss.setActiveSheet(opSheet);
-        
-        // 2. Set C3 value and flush immediately to commit the change in Google's state engine
-        targetRange.setValue(String(woBatch));
+        targetRange.setValue(formattedBarcode);
         SpreadsheetApp.flush();
         
-        // 3. Trigger manageOperatorStation with the active sheet context established
         if (typeof manageOperatorStation === "function") {
           try {
             manageOperatorStation({
               source: ss,
               range: targetRange,
-              value: String(woBatch),
+              value: formattedBarcode,
               oldValue: ""
             });
           } catch (err) {
