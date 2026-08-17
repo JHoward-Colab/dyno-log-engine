@@ -1,10 +1,11 @@
 // =========================================================================
 // 📊 SUMMARY DASHBOARD CONTROLLER (Summary.js)
-// Registry-Filtered, UI.js Cell A8 Mirroring Serial Engine
+// Registry-Filtered & Exact UI.js Engine Mirroring Controller
 // =========================================================================
 
 /**
- * Normalizes string keys (Mirrors UI.js cleanKey).
+ * Normalizes string keys by stripping non-alphanumeric characters and lowercasing.
+ * Exact copy from UI.js.
  */
 function cleanKey(val) {
   if (val === null || val === undefined) return "";
@@ -38,7 +39,8 @@ function robustExtractWoBatchNum(strVal) {
 }
 
 /**
- * Robust Serial Matcher copied directly from UI.js.
+ * Robust Serial Matcher between Work Order barcodes and Dyno Log serials.
+ * Exact copy from UI.js.
  */
 function isSerialMatch(expSerial, logSerial) {
   var cExp = cleanKey(expSerial);
@@ -62,6 +64,34 @@ function isSerialMatch(expSerial, logSerial) {
   }
 
   return false;
+}
+
+/**
+ * Builds header map for Master_Dyno_Log columns.
+ * Exact copy pattern from UI.js.
+ */
+function buildHeaderMap(headers) {
+  var map = {
+    trueSerial: 2,      // Col C (default)
+    baseModel: 3,       // Col D (default)
+    test1Status: 6,     // Col G (default)
+    test2Status: 7,     // Col H (default)
+    overallStatus: 8,   // Col I (default)
+    diagnostics: 10,    // Col K (default)
+    timestamp: 0        // Col A (default)
+  };
+
+  for (var i = 0; i < headers.length; i++) {
+    var h = String(headers[i]).toLowerCase().replace(/[^a-z0-9]/g, "");
+    if (h.includes("trueserial") || (h.includes("serial") && !h.includes("type"))) map.trueSerial = i;
+    if (h.includes("basemodel") || h.includes("partnumber")) map.baseModel = i;
+    if (h.includes("test1") || h.includes("comp1status") || h.includes("t1status")) map.test1Status = i;
+    if (h.includes("test2") || h.includes("comp2status") || h.includes("t2status")) map.test2Status = i;
+    if (h.includes("overall") || h.includes("overallstatus")) map.overallStatus = i;
+    if (h.includes("diag") || h.includes("diagnostics")) map.diagnostics = i;
+    if (h.includes("time") || h.includes("date")) map.timestamp = i;
+  }
+  return map;
 }
 
 function isValidCache(jsonStr) {
@@ -191,7 +221,7 @@ function runFullSystemIndexer() {
 }
 
 /**
- * Builds Summary Dashboard mirroring UI.js cell A8 decision logic.
+ * Builds Summary Dashboard mirroring UI.js cell A8 decision logic and renderOperatorTableWithFormatting().
  */
 function buildSummaryDashboard() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -213,46 +243,10 @@ function buildSummaryDashboard() {
   }
 
   var logData = logSheet.getDataRange().getValues();
-  var logCols = CONFIG.COLUMNS.MASTER_DYNO_LOG || {};
   var sumCols = CONFIG.COLUMNS.SUMMARY || {};
-
   var BASELINE_WO_FLOOR = 1608;
 
-  // Header Auto-Detection (Col G = Test 1, Col H = Test 2, Col I = Overall)
-  var colTrueSerial    = (logCols.TRUE_SERIAL || 3) - 1;
-  var colBaseModel     = (logCols.BASE_MODEL || 4) - 1;
-  var colTest1Status   = 6;  // Col G
-  var colTest2Status   = 7;  // Col H
-  var colOverallStatus = (logCols.OVERALL_STATUS || 9) - 1; // Col I
-  var colDiagnostics   = (logCols.DIAGNOSTICS || 11) - 1;   // Col K
-  var colTimestamp     = (logCols.TIMESTAMP || 1) - 1;     // Col A
-
-  var logHeaders = logData[0] || [];
-  for (var c = 0; c < logHeaders.length; c++) {
-    var hText = String(logHeaders[c]).toUpperCase().trim();
-    if (hText.indexOf("TRUE_SERIAL") !== -1 || hText === "SERIAL") colTrueSerial = c;
-    if (hText.indexOf("TEST 1") !== -1 || hText.indexOf("TEST1") !== -1) colTest1Status = c;
-    if (hText.indexOf("TEST 2") !== -1 || hText.indexOf("TEST2") !== -1) colTest2Status = c;
-    if (hText.indexOf("OVERALL") !== -1) colOverallStatus = c;
-    if (hText.indexOf("DIAG") !== -1) colDiagnostics = c;
-    if (hText.indexOf("TIME") !== -1 || hText.indexOf("DATE") !== -1) colTimestamp = c;
-  }
-
-  // Group latest runs by serial
-  var latestLogBySerial = {};
-  if (logData.length > 1) {
-    for (var r = 1; r < logData.length; r++) {
-      var row = logData[r];
-      var trueSerial = String(row[colTrueSerial] || "").trim();
-      if (trueSerial) {
-        var cSer = cleanKey(trueSerial);
-        latestLogBySerial[cSer] = {
-          data: row,
-          trueSerial: trueSerial
-        };
-      }
-    }
-  }
+  var hMap = buildHeaderMap(logData[0] || []);
 
   var propsService = PropertiesService.getScriptProperties();
   var allProps = propsService.getProperties();
@@ -311,6 +305,36 @@ function buildSummaryDashboard() {
       continue;
     }
 
+    // Mirror UI.js searchBarcode filtering per Work Order
+    var searchBarcode = String(item.woNum || woNumber).trim();
+    var cleanBarcodeStr = cleanKey(searchBarcode);
+    var cleanPartStr = cleanKey(baseModel);
+
+    var latestLogBySerial = {};
+
+    if (logData.length > 1) {
+      for (var r = 1; r < logData.length; r++) {
+        var row = logData[r];
+        var trueSerial = String(row[hMap.trueSerial] || "").trim();
+        var logBaseModel = cleanKey(row[hMap.baseModel]);
+        var cleanSerial = cleanKey(trueSerial);
+
+        var isMatch = false;
+        if (cleanBarcodeStr !== "" && cleanSerial.includes(cleanBarcodeStr)) {
+          isMatch = true;
+        } else if (cleanPartStr !== "" && logBaseModel === cleanPartStr && (cleanBarcodeStr === "" || cleanBarcodeStr === "undefined")) {
+          isMatch = true;
+        }
+
+        if (isMatch && trueSerial !== "") {
+          latestLogBySerial[cleanSerial] = {
+            data: row,
+            trueSerial: trueSerial
+          };
+        }
+      }
+    }
+
     var totalQty = expectedSerials.length;
     var testedCount = 0;
     var untestedCount = 0;
@@ -338,11 +362,11 @@ function buildSummaryDashboard() {
         testedCount++;
         var row = matchedLogItem.data;
 
-        var t1Status    = String(row[colTest1Status] || "").trim().toUpperCase();
-        var t2Status    = String(row[colTest2Status] || "").trim().toUpperCase();
-        var overallStat = String(row[colOverallStatus] || "").trim().toUpperCase();
-        var diagnostics = String(row[colDiagnostics] || "").trim();
-        var runDate     = row[colTimestamp];
+        var t1Status    = String(row[hMap.test1Status] || "").trim().toUpperCase();
+        var t2Status    = String(row[hMap.test2Status] || "").trim().toUpperCase();
+        var overallStat = String(row[hMap.overallStatus] || "").trim().toUpperCase();
+        var diagnostics = String(row[hMap.diagnostics] || "").trim();
+        var runDate     = row[hMap.timestamp];
 
         if (runDate instanceof Date && (!lastDate || runDate > lastDate)) {
           lastDate = runDate;
@@ -381,14 +405,14 @@ function buildSummaryDashboard() {
       woStatus = "NO SERIALS"; statusBg = "#F2F4F4"; statusFont = "#5D6D7E";
     } else if (testedCount === 0) {
       woStatus = "PENDING"; statusBg = "#FCF3CF"; statusFont = "#B7950B";
-    } else if (untestedCount > 0) {
-      woStatus = "INCOMPLETE"; statusBg = "#FCF3CF"; statusFont = "#B7950B";
     } else if (holdCount > 0) {
       woStatus = "HOLD"; statusBg = "#FCF3CF"; statusFont = "#B7950B";
     } else if (test1FailCount > 0) {
       woStatus = "ACTION REQUIRED"; statusBg = "#FADBD8"; statusFont = "#C0392B";
     } else if (test2FailCount > 0) {
       woStatus = "CONDITIONAL PASS"; statusBg = "#FDEBD0"; statusFont = "#B9770E";
+    } else if (untestedCount > 0) {
+      woStatus = "INCOMPLETE"; statusBg = "#FCF3CF"; statusFont = "#B7950B";
     } else {
       woStatus = "COMPLETED"; statusBg = "#D4EFDF"; statusFont = "#196F3D";
     }
@@ -437,7 +461,7 @@ function clearWoSummaryCache() {
 
 /**
  * Interactive Column 1 Click Navigator.
- * Populates pure numeric batch digits (e.g. 1905) into cell C3.
+ * Populates pure numeric batch digits (e.g. 1905, 1634) into cell C3.
  */
 function onSelectionChange(e) {
   if (!e || !e.range) return;
