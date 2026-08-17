@@ -1,6 +1,6 @@
 // =========================================================================
 // 📊 SUMMARY DASHBOARD CONTROLLER (Summary.js)
-// High-Speed Incremental Work Order Compiler & Interactive Dashboard
+// Ultra-Fast Parallel REST API Engine for Summary Tab Dashboard
 // =========================================================================
 
 /**
@@ -34,10 +34,9 @@ function robustExtractWoBatchNum(strVal) {
 }
 
 /**
- * Rebuilds the Summary Dashboard tab incrementally starting at WO 1608 baseline.
+ * Rebuilds the Summary Dashboard tab instantly using parallel REST requests.
  */
 function buildSummaryDashboard() {
-  var startTime = new Date().getTime();
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var summarySheet = ss.getSheetByName(CONFIG.SHEET_NAMES.SUMMARY);
   var logSheet = ss.getSheetByName(CONFIG.SHEET_NAMES.MASTER_DYNO_LOG);
@@ -63,9 +62,8 @@ function buildSummaryDashboard() {
   var sumCols = CONFIG.COLUMNS.SUMMARY || {};
 
   var BASELINE_WO_FLOOR = 1608;
-  var OPEN_TIME_BUDGET_MS = 8000; // 8-second execution budget for uncached file opens
 
-  // STEP 1: Group ALL Dyno Runs by Serial Number (Preserving Chronological Order)
+  // STEP 1: Group Dyno Runs Chronologically
   var allRunsBySerial = {};
 
   for (var r = 1; r < logData.length; r++) {
@@ -79,13 +77,14 @@ function buildSummaryDashboard() {
     }
   }
 
-  // STEP 2: Load ALL Script Properties into Memory Once (0ms In-Memory Lookups)
+  // STEP 2: Load In-Memory Script Properties
   var propsService = PropertiesService.getScriptProperties();
   var allProps = propsService.getProperties();
 
-  // STEP 3: Collect Work Order Drive Files
+  // STEP 3: Scan Folder Files
   var filesIterator = folder.getFiles();
   var fileList = [];
+  var uncachedFiles = [];
 
   while (filesIterator.hasNext()) {
     var f = filesIterator.next();
@@ -98,15 +97,87 @@ function buildSummaryDashboard() {
       continue;
     }
 
-    fileList.push({
-      file: f,
+    var fileObj = {
       id: f.getId(),
       name: fName,
       woNum: fWoNum
-    });
+    };
+
+    fileList.push(fileObj);
+
+    var propKey = "WO_META_" + fileObj.id;
+    if (!allProps[propKey]) {
+      uncachedFiles.push(fileObj);
+    }
   }
 
-  // STEP 4: Sort Files Ascending (1608, 1609, 1610...)
+  // STEP 4: PARALLEL REST FETCH for Uncached Files
+  if (uncachedFiles.length > 0) {
+    var token;
+    try {
+      token = ScriptApp.getOAuthToken();
+    } catch (tokenErr) {
+      summarySheet.getRange("A2").setValue("❌ OAuth Token Error. Re-authorize script permissions.");
+      return;
+    }
+
+    var requests = [];
+    for (var u = 0; u < uncachedFiles.length; u++) {
+      var fetchUrl = "https://sheets.googleapis.com/v4/spreadsheets/" + uncachedFiles[u].id + "/values:batchGet?ranges=D3%3AD4&ranges=A12%3AA100";
+      requests.push({
+        url: fetchUrl,
+        method: "get",
+        headers: { Authorization: "Bearer " + token },
+        muteHttpExceptions: true
+      });
+    }
+
+    try {
+      var responses = UrlFetchApp.fetchAll(requests);
+      var newPropsToSave = {};
+
+      for (var k = 0; k < responses.length; k++) {
+        var uFile = uncachedFiles[k];
+        var propKey = "WO_META_" + uFile.id;
+        var resp = responses[k];
+
+        var bModel = "";
+        var bRev = "";
+        var expSerials = [];
+
+        if (resp.getResponseCode() === 200) {
+          var resData = JSON.parse(resp.getContentText());
+          if (resData.valueRanges && resData.valueRanges.length >= 2) {
+            var d3d4 = resData.valueRanges[0].values || [];
+            bModel = (d3d4[0] && d3d4[0][0]) ? String(d3d4[0][0]).trim() : "";
+            bRev = (d3d4[1] && d3d4[1][0]) ? String(d3d4[1][0]).trim() : "";
+
+            var serialRows = resData.valueRanges[1].values || [];
+            for (var s = 0; s < serialRows.length; s++) {
+              var sVal = (serialRows[s] && serialRows[s][0]) ? String(serialRows[s][0]).trim() : "";
+              if (sVal && sVal.toLowerCase() !== "undefined" && sVal.toLowerCase() !== "null") {
+                expSerials.push(sVal);
+              }
+            }
+          }
+        } else {
+          Logger.log("REST Error for " + uFile.name + ": Code " + resp.getResponseCode() + " - " + resp.getContentText());
+        }
+
+        var payload = JSON.stringify({ bm: bModel, br: bRev, es: expSerials });
+        newPropsToSave[propKey] = payload;
+        allProps[propKey] = payload;
+      }
+
+      propsService.setProperties(newPropsToSave, false);
+
+    } catch (err) {
+      summarySheet.getRange("A2").setValue("❌ Fetch Error: " + err.toString());
+      return;
+    }
+  }
+
+  // STEP 5: Sort Work Orders Ascending
   fileList.sort(function(a, b) {
     if (a.woNum !== b.woNum && a.woNum > 0 && b.woNum > 0) {
       return a.woNum - b.woNum;
@@ -119,7 +190,7 @@ function buildSummaryDashboard() {
   var fontColors = [];
   var fontWeights = [];
 
-  // STEP 5: Process Work Orders with Dynamic Time Budgeting
+  // STEP 6: Process Work Order Matrix
   for (var i = 0; i < fileList.length; i++) {
     var item = fileList[i];
     var fileId = item.id;
@@ -138,43 +209,10 @@ function buildSummaryDashboard() {
       var cachedStr = allProps[propKey];
 
       if (cachedStr) {
-        // INSTANT IN-MEMORY LOAD (0ms)
         var cachedData = JSON.parse(cachedStr);
         baseModel = cachedData.bm || cachedData.baseModel || "";
         bomRev = cachedData.br || cachedData.bomRev || "";
         expectedSerials = cachedData.es || cachedData.expectedSerials || [];
-      } else if ((new Date().getTime() - startTime) < OPEN_TIME_BUDGET_MS) {
-        // TIME-BUDGETED UNCACHED FILE OPEN
-        var woSs = SpreadsheetApp.openById(fileId);
-        var woSheet = woSs.getSheets()[0];
-
-        baseModel = String(woSheet.getRange("D3").getValue()).trim();
-        bomRev = String(woSheet.getRange("D4").getValue()).trim();
-
-        var woLastRow = woSheet.getLastRow();
-        if (woLastRow >= 12) {
-          var rawSerials = woSheet.getRange(12, 1, woLastRow - 11, 1).getValues();
-          for (var s = 0; s < rawSerials.length; s++) {
-            var sVal = String(rawSerials[s][0] || "").trim();
-            if (sVal && sVal.toLowerCase() !== "undefined" && sVal.toLowerCase() !== "null") {
-              expectedSerials.push(sVal);
-            }
-          }
-        }
-
-        // SAVE COMPACT PAYLOAD TO PRESERVE QUOTA
-        var cachePayload = {
-          bm: baseModel,
-          br: bomRev,
-          es: expectedSerials
-        };
-        var jsonPayload = JSON.stringify(cachePayload);
-        propsService.setProperty(propKey, jsonPayload);
-        allProps[propKey] = jsonPayload; // Keep local dictionary in sync
-      } else {
-        // OVER TIME BUDGET -> DEFER TO NEXT BACKGROUND SYNC
-        baseModel = "PENDING CACHE";
-        bomRev = "-";
       }
 
       var totalQty = expectedSerials.length;
@@ -193,14 +231,12 @@ function buildSummaryDashboard() {
         if (runs.length > 0) {
           testedCount++;
 
-          // 1. First Pass Yield (Earliest Dyno Run)
           var firstRun = runs[0];
           var firstOverall = String(firstRun[(logCols.OVERALL_STATUS || 21) - 1] || "").toUpperCase();
           if (firstOverall.includes("PASS")) {
             firstPassCount++;
           }
 
-          // 2. Current WO Status (Latest Dyno Run)
           var latestRun = runs[runs.length - 1];
           var latestOverall = String(latestRun[(logCols.OVERALL_STATUS || 21) - 1] || "").toUpperCase();
           var latestDiag = String(latestRun[(logCols.DIAGNOSTICS || 22) - 1] || "");
@@ -226,11 +262,7 @@ function buildSummaryDashboard() {
       var statusBg = "#FCF3CF";
       var statusFont = "#B7950B";
 
-      if (baseModel === "PENDING CACHE") {
-        woStatus = "PENDING";
-        statusBg = "#FCF3CF";
-        statusFont = "#B7950B";
-      } else if (totalQty === 0) {
+      if (totalQty === 0) {
         woStatus = "NO SERIALS";
         statusBg = "#F2F4F4";
         statusFont = "#5D6D7E";
@@ -256,7 +288,7 @@ function buildSummaryDashboard() {
         statusFont = "#196F3D";
       }
 
-      var progressStr = (baseModel === "PENDING CACHE") ? "Indexing..." : testedCount + " / " + totalQty + " (" + (totalQty > 0 ? Math.round((testedCount / totalQty) * 100) : 0) + "%)";
+      var progressStr = testedCount + " / " + totalQty + " (" + (totalQty > 0 ? Math.round((testedCount / totalQty) * 100) : 0) + "%)";
       var fpyStr = testedCount > 0 ? ((firstPassCount / testedCount) * 100).toFixed(1) + "%" : "N/A";
       var dateStr = lastDate ? Utilities.formatDate(lastDate, Session.getScriptTimeZone(), "yyyy-MM-dd HH:mm") : "N/A";
       var detailsStr = activeFailureDetails.length > 0 ? activeFailureDetails.join(", ") : (testedCount === totalQty && totalQty > 0 ? "✅ All Units Passed" : "⏳ Pending dyno test");
@@ -292,7 +324,7 @@ function buildSummaryDashboard() {
     }
   }
 
-  // STEP 6: Consolidated Range Clear & Bulk Render
+  // STEP 7: Render Table
   var maxRows = Math.max(summarySheet.getLastRow() - 1, 1);
   summarySheet.getRange(2, 1, maxRows, 8).clearContent().setBackground(null).setFontColor(null).setFontWeight("normal");
 
@@ -302,48 +334,5 @@ function buildSummaryDashboard() {
     targetRange.setBackgrounds(bgColors);
     targetRange.setFontColors(fontColors);
     targetRange.setFontWeights(fontWeights);
-  } else {
-    summarySheet.getRange("A2").setValue("⚠️ No Work Orders found matching baseline threshold (WO >= " + minWoNumber + ").");
-  }
-}
-
-/**
- * Utility helper to clear persistent WO metadata properties if files are modified.
- */
-function clearWoSummaryCache() {
-  var props = PropertiesService.getScriptProperties();
-  var keys = props.getKeys();
-  for (var i = 0; i < keys.length; i++) {
-    if (keys[i].indexOf("WO_META_") === 0) {
-      props.deleteProperty(keys[i]);
-    }
-  }
-  Logger.log("Summary persistent metadata cache cleared.");
-}
-
-/**
- * Interactive Work Order Jumper.
- * Clicking Column A (Work_Order_Status) or Column B (Work_Order_Number) loads that Work Order into Operator_Station.
- */
-function onSelectionChange(e) {
-  if (!e || !e.range) return;
-  var sheet = e.range.getSheet();
-  var sumCols = CONFIG.COLUMNS.SUMMARY || {};
-
-  var col = e.range.getColumn();
-  var row = e.range.getRow();
-
-  if (sheet.getName() === CONFIG.SHEET_NAMES.SUMMARY && (col === 1 || col === 2) && row > 1) {
-    var rawVal = String(sheet.getRange(row, 2).getValue()).trim();
-    if (!rawVal || rawVal.startsWith("⚠️") || rawVal.startsWith("❌")) return;
-
-    var ss = e.source || SpreadsheetApp.getActiveSpreadsheet();
-    var opSheet = ss.getSheetByName(CONFIG.SHEET_NAMES.OPERATOR_STATION);
-
-    if (opSheet) {
-      opSheet.getRange(CONFIG.OPERATOR_STATION.RANGES.BARCODE_INPUT).setValue(rawVal);
-      manageOperatorStation({ source: ss, range: opSheet.getRange(CONFIG.OPERATOR_STATION.RANGES.BARCODE_INPUT) });
-      ss.setActiveSheet(opSheet);
-    }
   }
 }
