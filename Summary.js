@@ -4,7 +4,7 @@
 // =========================================================================
 
 /**
- * Safely extracts 4-digit/6-digit WO batch number from barcodes, short serials, or file names.
+ * Safely extracts WO batch number from barcodes, short serials, or file names.
  * e.g., "43081008001979001" -> 1979
  * e.g., "001979-001"        -> 1979
  * e.g., "001979"            -> 1979
@@ -32,6 +32,7 @@ function extractWoBatchNum(strVal) {
  * Rebuilds the Summary Dashboard tab from Work Order Drive files and Master_Dyno_Log.
  */
 function buildSummaryDashboard() {
+  var startTime = new Date().getTime();
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var summarySheet = ss.getSheetByName(CONFIG.SHEET_NAMES.SUMMARY);
   var logSheet = ss.getSheetByName(CONFIG.SHEET_NAMES.MASTER_DYNO_LOG);
@@ -77,33 +78,55 @@ function buildSummaryDashboard() {
 
   if (minWoNumber === 999999) minWoNumber = 0;
 
-  // STEP 2: Query Drive Files
-  var files = folder.searchFiles("mimeType = '" + MimeType.GOOGLE_SHEETS + "' and trashed = false");
-  var cache = CacheService.getScriptCache();
+  // STEP 2: Collect & Sort Drive Files by Last Updated (Newest First)
+  var filesIterator = folder.searchFiles("mimeType = '" + MimeType.GOOGLE_SHEETS + "' and trashed = false");
+  var fileList = [];
 
+  while (filesIterator.hasNext()) {
+    var f = filesIterator.next();
+    var fName = f.getName();
+    var fWoNum = extractWoBatchNum(fName);
+
+    // Instant Cutoff Filter: Skip legacy files older than lowest dyno log WO
+    if (fWoNum > 0 && minWoNumber > 0 && fWoNum < minWoNumber) {
+      continue;
+    }
+
+    fileList.push({
+      file: f,
+      id: f.getId(),
+      name: fName,
+      lastUpdated: f.getLastUpdated().getTime()
+    });
+  }
+
+  // Sort newest files first and cap processing pool to top 25 recent Work Orders
+  fileList.sort(function(a, b) { return b.lastUpdated - a.lastUpdated; });
+  var processList = fileList.slice(0, 25);
+
+  var cache = CacheService.getScriptCache();
   var tableOutput = [];
   var bgColors = [];
   var fontColors = [];
   var fontWeights = [];
 
-  while (files.hasNext()) {
-    var file = files.next();
-    var fileId = file.getId();
-    var fileName = file.getName();
-    var woNumber = fileName.replace(/\.[^/.]+$/, "").trim();
-
-    // STEP 3: Instant Cutoff Check (Skip legacy files without opening)
-    var fileWoNum = extractWoBatchNum(fileName);
-    if (fileWoNum > 0 && minWoNumber > 0 && fileWoNum < minWoNumber) {
-      continue; // Skip legacy file in 0ms
+  // STEP 3: Time-Guarded Processing Loop (Max 12 Seconds)
+  for (var i = 0; i < processList.length; i++) {
+    if ((new Date().getTime() - startTime) > 12000) {
+      Logger.log("Time guard reached (12s). Rendering current " + tableOutput.length + " Work Orders.");
+      break; // Exit loop safely to guarantee rendering before execution timeout
     }
+
+    var item = processList[i];
+    var fileId = item.id;
+    var fileName = item.name;
+    var woNumber = fileName.replace(/\.[^/.]+$/, "").trim();
 
     try {
       var baseModel = "";
       var bomRev = "";
       var expectedSerials = [];
 
-      // STEP 4: High-Speed Cache Lookup for File Metadata
       var cacheKey = "WO_META_" + fileId;
       var cachedJson = cache.get(cacheKey);
 
@@ -113,7 +136,6 @@ function buildSummaryDashboard() {
         bomRev = cachedData.bomRev;
         expectedSerials = cachedData.expectedSerials;
       } else {
-        // Open file once on cache miss and save to Cache
         var woSs = SpreadsheetApp.openById(fileId);
         var woSheet = woSs.getSheets()[0];
 
@@ -131,13 +153,12 @@ function buildSummaryDashboard() {
           }
         }
 
-        // Cache metadata for 6 hours (21,600 seconds)
         var cachePayload = {
           baseModel: baseModel,
           bomRev: bomRev,
           expectedSerials: expectedSerials
         };
-        cache.put(cacheKey, JSON.stringify(cachePayload), 21600);
+        cache.put(cacheKey, JSON.stringify(cachePayload), 21600); // Cache for 6 hours
       }
 
       var totalQty = expectedSerials.length;
@@ -254,6 +275,7 @@ function buildSummaryDashboard() {
     }
   }
 
+  // STEP 4: Bulk Render Table to Summary Sheet
   var maxRows = Math.max(summarySheet.getLastRow() - 1, 1);
   summarySheet.getRange(2, 1, maxRows, 8).clearContent().setBackground(null).setFontColor(null).setFontWeight("normal");
 
