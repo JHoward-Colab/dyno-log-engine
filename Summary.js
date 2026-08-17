@@ -5,10 +5,6 @@
 
 /**
  * Robustly extracts WO batch number from barcodes, short serials, or file names.
- * e.g., "43081008001979001" -> 1979
- * e.g., "001979-001"        -> 1979
- * e.g., "WO-1979"           -> 1979
- * e.g., "Work Order 1979"   -> 1979
  */
 function robustExtractWoBatchNum(strVal) {
   var s = String(strVal || "").trim();
@@ -17,21 +13,18 @@ function robustExtractWoBatchNum(strVal) {
   var cleanDigits = s.replace(/[^0-9]/g, "");
   if (!cleanDigits) return 0;
 
-  // 17-digit barcode format (e.g., 43081008001979001)
   if (cleanDigits.length >= 14) {
     var batchPart = cleanDigits.slice(-7, -3);
     var pBatch = parseInt(batchPart, 10);
     if (!isNaN(pBatch) && pBatch > 0) return pBatch;
   }
 
-  // Short serial with hyphen (e.g., "001979-001")
   if (s.indexOf("-") !== -1) {
     var prefix = s.split("-")[0];
     var pDigits = prefix.replace(/[^0-9]/g, "");
     if (pDigits) return parseInt(pDigits, 10) || 0;
   }
 
-  // Regex lookup for 4 to 6 digit sequence
   var match = s.match(/\b\d{4,6}\b/) || s.match(/\d{4,6}/);
   if (match) {
     return parseInt(match[0], 10) || 0;
@@ -44,7 +37,6 @@ function robustExtractWoBatchNum(strVal) {
  * Rebuilds the Summary Dashboard tab from Work Order Drive files and Master_Dyno_Log.
  */
 function buildSummaryDashboard() {
-  var startTime = new Date().getTime();
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var summarySheet = ss.getSheetByName(CONFIG.SHEET_NAMES.SUMMARY);
   var logSheet = ss.getSheetByName(CONFIG.SHEET_NAMES.MASTER_DYNO_LOG);
@@ -69,7 +61,7 @@ function buildSummaryDashboard() {
   var logCols = CONFIG.COLUMNS.MASTER_DYNO_LOG || {};
   var sumCols = CONFIG.COLUMNS.SUMMARY || {};
 
-  // STEP 1: Determine Earliest WO Number in Master_Dyno_Log & Index Serials
+  // STEP 1: Determine Earliest Active WO Number in Master_Dyno_Log & Index Serials
   var minWoNumber = 999999;
   var logMapByCleanSerial = {};
   var logSerialsList = [];
@@ -90,7 +82,7 @@ function buildSummaryDashboard() {
 
   if (minWoNumber === 999999) minWoNumber = 0;
 
-  // STEP 2: Collect Drive Files & Filter Legacy Files Older Than Baseline
+  // STEP 2: Collect & Filter Files
   var filesIterator = folder.searchFiles("mimeType = '" + MimeType.GOOGLE_SHEETS + "' and trashed = false");
   var fileList = [];
 
@@ -99,7 +91,6 @@ function buildSummaryDashboard() {
     var fName = f.getName();
     var fWoNum = robustExtractWoBatchNum(fName);
 
-    // Filter out legacy files older than baseline WO threshold
     if (fWoNum > 0 && minWoNumber > 0 && fWoNum < minWoNumber) {
       continue;
     }
@@ -113,7 +104,7 @@ function buildSummaryDashboard() {
     });
   }
 
-  // STEP 3: Sort Files by Work Order Number in Ascending Order (1979, 1980, 1981...)
+  // STEP 3: Sort Files by Work Order Number Ascending
   fileList.sort(function(a, b) {
     if (a.woNum !== b.woNum && a.woNum > 0 && b.woNum > 0) {
       return a.woNum - b.woNum;
@@ -121,25 +112,22 @@ function buildSummaryDashboard() {
     return a.name.localeCompare(b.name);
   });
 
-  var cache = CacheService.getScriptCache();
+  var props = PropertiesService.getScriptProperties();
+  var uncachedOpenedCount = 0;
+  var MAX_UNCACHED_OPENS = 4; // Hard cap per execution to keep run time < 5s
+
   var tableOutput = [];
   var bgColors = [];
   var fontColors = [];
   var fontWeights = [];
 
-  // STEP 4: Process Sorted Work Orders (Time-Guarded for 240 Seconds / 4 Minutes)
+  // STEP 4: Process Files using Persistent Storage
   for (var i = 0; i < fileList.length; i++) {
-    if ((new Date().getTime() - startTime) > 240000) {
-      Logger.log("Time guard reached (240s). Rendering current " + tableOutput.length + " Work Orders.");
-      break;
-    }
-
     var item = fileList[i];
     var fileId = item.id;
     var fileName = item.name;
     var woNumber = fileName.replace(/\.[^/.]+$/, "").trim();
 
-    // Construct Direct Google Drive File Hyperlink Formula
     var fileUrl = "https://docs.google.com/spreadsheets/d/" + fileId + "/edit";
     var woLinkFormula = '=HYPERLINK("' + fileUrl + '", "' + woNumber + '")';
 
@@ -148,15 +136,18 @@ function buildSummaryDashboard() {
       var bomRev = "";
       var expectedSerials = [];
 
-      var cacheKey = "WO_META_" + fileId;
-      var cachedJson = cache.get(cacheKey);
+      var propKey = "WO_META_" + fileId;
+      var cachedStr = props.getProperty(propKey);
 
-      if (cachedJson) {
-        var cachedData = JSON.parse(cachedJson);
+      if (cachedStr) {
+        // INSTANT 0ms LOAD FROM PERSISTENT STORAGE
+        var cachedData = JSON.parse(cachedStr);
         baseModel = cachedData.baseModel;
         bomRev = cachedData.bomRev;
-        expectedSerials = cachedData.expectedSerials;
-      } else {
+        expectedSerials = cachedData.expectedSerials || [];
+      } else if (uncachedOpenedCount < MAX_UNCACHED_OPENS) {
+        // OPEN UNCACHED FILE (CAPPED AT 4 PER RUN)
+        uncachedOpenedCount++;
         var woSs = SpreadsheetApp.openById(fileId);
         var woSheet = woSs.getSheets()[0];
 
@@ -174,12 +165,17 @@ function buildSummaryDashboard() {
           }
         }
 
+        // SAVE METADATA PERMANENTLY
         var cachePayload = {
           baseModel: baseModel,
           bomRev: bomRev,
           expectedSerials: expectedSerials
         };
-        cache.put(cacheKey, JSON.stringify(cachePayload), 21600); // 6-hour cache
+        props.setProperty(propKey, JSON.stringify(cachePayload));
+      } else {
+        // OVER CAPACITY FALLBACK: DEFER FILE OPEN TO NEXT RUN
+        baseModel = "PENDING CACHE";
+        bomRev = "-";
       }
 
       var totalQty = expectedSerials.length;
@@ -234,7 +230,11 @@ function buildSummaryDashboard() {
       var statusBg = "#FCF3CF";
       var statusFont = "#B7950B";
 
-      if (totalQty === 0) {
+      if (baseModel === "PENDING CACHE") {
+        woStatus = "PENDING";
+        statusBg = "#FCF3CF";
+        statusFont = "#B7950B";
+      } else if (totalQty === 0) {
         woStatus = "NO SERIALS";
         statusBg = "#F2F4F4";
         statusFont = "#5D6D7E";
@@ -260,10 +260,10 @@ function buildSummaryDashboard() {
         statusFont = "#196F3D";
       }
 
-      var progressStr = testedCount + " / " + totalQty + " (" + (totalQty > 0 ? Math.round((testedCount / totalQty) * 100) : 0) + "%)";
+      var progressStr = (baseModel === "PENDING CACHE") ? "Indexing..." : testedCount + " / " + totalQty + " (" + (totalQty > 0 ? Math.round((testedCount / totalQty) * 100) : 0) + "%)";
       var fpyStr = testedCount > 0 ? ((passCount / testedCount) * 100).toFixed(1) + "%" : "N/A";
       var dateStr = lastDate ? Utilities.formatDate(lastDate, Session.getScriptTimeZone(), "yyyy-MM-dd HH:mm") : "N/A";
-      var detailsStr = failureDetails.length > 0 ? failureDetails.join(", ") : (testedCount === totalQty ? "✅ All Units Passed" : "⏳ Pending dyno test");
+      var detailsStr = failureDetails.length > 0 ? failureDetails.join(", ") : (testedCount === totalQty && totalQty > 0 ? "✅ All Units Passed" : "⏳ Pending dyno test");
 
       var rowData = new Array(8);
       rowData[(sumCols.WORK_ORDER_STATUS || 1) - 1] = woStatus;
@@ -309,6 +309,20 @@ function buildSummaryDashboard() {
   } else {
     summarySheet.getRange("A2").setValue("⚠️ No Work Orders matched starting threshold (WO >= " + minWoNumber + ").");
   }
+}
+
+/**
+ * Utility helper to clear persistent WO metadata properties if files are modified.
+ */
+function clearWoSummaryCache() {
+  var props = PropertiesService.getScriptProperties();
+  var keys = props.getKeys();
+  for (var i = 0; i < keys.length; i++) {
+    if (keys[i].indexOf("WO_META_") === 0) {
+      props.deleteProperty(keys[i]);
+    }
+  }
+  Logger.log("Summary persistent metadata cache cleared.");
 }
 
 /**
