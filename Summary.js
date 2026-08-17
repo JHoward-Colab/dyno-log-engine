@@ -1,8 +1,11 @@
 // =========================================================================
 // 📊 SUMMARY DASHBOARD CONTROLLER (Summary.js)
-// Smart-Targeted Incremental Indexer & Interactive Navigator
+// Time-Guarded Backlog Indexer & Interactive Dashboard Navigator
 // =========================================================================
 
+/**
+ * Robustly extracts WO batch number from barcodes, short serials, or file names.
+ */
 function robustExtractWoBatchNum(strVal) {
   var s = String(strVal || "").trim();
   if (!s) return 0;
@@ -27,9 +30,13 @@ function robustExtractWoBatchNum(strVal) {
 }
 
 /**
- * Dedicated One-Click Indexer: Scans Drive and caches ALL remaining uncached Work Orders.
+ * Smart-Targeted Indexer with 4-Minute Safety Valve for Large Backlogs
+ * Run this manually from the Apps Script editor to ingest backlogs (e.g. 400+ files).
  */
 function runFullSystemIndexer() {
+  var startTime = new Date().getTime();
+  var MAX_EXECUTION_TIME = 240000; // 4 minutes (prevents 6-minute Google kill switch)
+  
   var folderId = CONFIG.FOLDERS.WORK_ORDER_FOLDER_ID;
   if (!folderId) {
     Logger.log("❌ Error: WORK_ORDER_FOLDER_ID not set.");
@@ -45,6 +52,7 @@ function runFullSystemIndexer() {
   var filesIterator = folder.getFiles();
   var uncachedList = [];
 
+  // 1. Identify Uncached Files
   while (filesIterator.hasNext()) {
     var f = filesIterator.next();
     var fName = f.getName();
@@ -67,8 +75,17 @@ function runFullSystemIndexer() {
     return;
   }
 
-  // Index uncached files in safe 5-file batches
+  var indexedThisRun = 0;
+
+  // 2. Process Files Until 4-Minute Warning
   for (var i = 0; i < uncachedList.length; i++) {
+    var elapsed = new Date().getTime() - startTime;
+    if (elapsed > MAX_EXECUTION_TIME) {
+      Logger.log("⏱️ 4-Minute Safety Limit Reached. Indexed " + indexedThisRun + " files this run.");
+      Logger.log("⚠️ Please click 'Run' again to continue indexing the remaining " + (uncachedList.length - indexedThisRun) + " files.");
+      break; 
+    }
+
     var item = uncachedList[i];
     try {
       var woSs = SpreadsheetApp.openById(item.id);
@@ -91,24 +108,23 @@ function runFullSystemIndexer() {
 
       var payloadStr = JSON.stringify({ bm: baseModel, br: bomRev, es: expectedSerials });
       propsService.setProperty("WO_META_" + item.id, payloadStr);
-      Logger.log("Indexed (" + (i + 1) + "/" + uncachedList.length + "): " + item.name);
+      indexedThisRun++;
+      
+      Logger.log("Indexed (" + indexedThisRun + "/" + uncachedList.length + "): " + item.name);
 
     } catch (err) {
       Logger.log("Failed to index " + item.name + ": " + err.toString());
     }
-
-    // Brief pause every 5 files to avoid Google network throttle
-    if ((i + 1) % 5 === 0) {
-      Utilities.sleep(500);
-    }
   }
 
-  Logger.log("🎉 Indexing 100% complete! Rendering final Summary Dashboard...");
+  Logger.log("Render phase starting. Updating Summary tab with newly cached files...");
   buildSummaryDashboard();
+  SpreadsheetApp.flush(); // Force the screen to update immediately
 }
 
 /**
- * Builds the Summary Dashboard tab from cached metadata and Master_Dyno_Log.
+ * Standard Dashboard Builder (Incremental 3-File Caching)
+ * Used for automated background triggers and live button clicks.
  */
 function buildSummaryDashboard() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -133,6 +149,7 @@ function buildSummaryDashboard() {
   var sumCols = CONFIG.COLUMNS.SUMMARY || {};
 
   var BASELINE_WO_FLOOR = 1608;
+  var MAX_UNCACHED_PER_RUN = 3; // Keep normal runs extremely fast
 
   // STEP 1: Group Dyno Runs Chronologically
   var allRunsBySerial = {};
@@ -169,6 +186,7 @@ function buildSummaryDashboard() {
     return (a.woNum !== b.woNum && a.woNum > 0 && b.woNum > 0) ? (a.woNum - b.woNum) : a.name.localeCompare(b.name);
   });
 
+  var uncachedOpenedCount = 0;
   var tableOutput = [];
   var bgColors = [];
   var fontColors = [];
@@ -192,11 +210,43 @@ function buildSummaryDashboard() {
     var cachedStr = allProps[propKey];
 
     if (cachedStr) {
+      // INSTANT 0ms LOAD FROM PERSISTENT STORAGE
       var cachedData = JSON.parse(cachedStr);
       baseModel = cachedData.bm || "";
       bomRev = cachedData.br || "";
       expectedSerials = cachedData.es || [];
+    } else if (uncachedOpenedCount < MAX_UNCACHED_PER_RUN) {
+      // FAST INCREMENTAL CACHING (Max 3)
+      uncachedOpenedCount++;
+      try {
+        var woSs = SpreadsheetApp.openById(fileId);
+        var woSheet = woSs.getSheets()[0];
+
+        baseModel = String(woSheet.getRange("D3").getValue()).trim();
+        bomRev = String(woSheet.getRange("D4").getValue()).trim();
+
+        var woLastRow = woSheet.getLastRow();
+        if (woLastRow >= 12) {
+          var raw = woSheet.getRange(12, 1, woLastRow - 11, 1).getValues();
+          for (var s = 0; s < raw.length; s++) {
+            var v = String(raw[s][0] || "").trim();
+            if (v && v.toLowerCase() !== "undefined" && v.toLowerCase() !== "null") {
+              expectedSerials.push(v);
+            }
+          }
+        }
+
+        var payloadStr = JSON.stringify({ bm: baseModel, br: bomRev, es: expectedSerials });
+        propsService.setProperty(propKey, payloadStr);
+        allProps[propKey] = payloadStr; // Sync local object
+
+      } catch (openErr) {
+        Logger.log("Error opening WO file " + fileName + ": " + openErr.toString());
+        baseModel = "ERROR";
+        bomRev = "-";
+      }
     } else {
+      // DEFER TO NEXT BACKGROUND RUN
       baseModel = "PENDING CACHE";
       bomRev = "-";
     }
@@ -217,17 +267,21 @@ function buildSummaryDashboard() {
       if (runs.length > 0) {
         testedCount++;
 
+        // 1. First Pass Yield Evaluation (Earliest Run)
         var firstRun = runs[0];
         if (String(firstRun[(logCols.OVERALL_STATUS || 21) - 1] || "").toUpperCase().includes("PASS")) {
           firstPassCount++;
         }
 
+        // 2. Active Status Evaluation (Latest Run)
         var latestRun = runs[runs.length - 1];
         var latestOverall = String(latestRun[(logCols.OVERALL_STATUS || 21) - 1] || "").toUpperCase();
         var latestDiag = String(latestRun[(logCols.DIAGNOSTICS || 22) - 1] || "");
         var runDate = latestRun[(logCols.TIMESTAMP || 1) - 1];
 
-        if (runDate instanceof Date && (!lastDate || runDate > lastDate)) lastDate = runDate;
+        if (runDate instanceof Date && (!lastDate || runDate > lastDate)) {
+          lastDate = runDate;
+        }
 
         if (latestOverall.includes("HOLD")) {
           activeHoldCount++;
@@ -281,7 +335,7 @@ function buildSummaryDashboard() {
     fontWeights.push(["bold", "bold", "normal", "normal", "normal", "normal", "normal", "normal"]);
   }
 
-  // STEP 6: Render Sheet
+  // STEP 6: Single Bulk Output to Summary Sheet
   var maxRows = Math.max(summarySheet.getLastRow() - 1, 1);
   summarySheet.getRange(2, 1, maxRows, 8).clearContent().setBackground(null).setFontColor(null).setFontWeight("normal");
 
@@ -294,6 +348,9 @@ function buildSummaryDashboard() {
   }
 }
 
+/**
+ * Flushes all cached metadata. Only use if files change significantly.
+ */
 function clearWoSummaryCache() {
   var props = PropertiesService.getScriptProperties();
   var keys = props.getKeys();
@@ -303,6 +360,10 @@ function clearWoSummaryCache() {
   Logger.log("Summary persistent metadata cache cleared.");
 }
 
+/**
+ * Interactive Work Order Jumper.
+ * Clicking Column A (Work_Order_Status) or Column B (Work_Order_Number) loads that Work Order into Operator_Station.
+ */
 function onSelectionChange(e) {
   if (!e || !e.range) return;
   var sheet = e.range.getSheet();
