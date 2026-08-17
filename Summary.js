@@ -1,6 +1,6 @@
 // =========================================================================
 // 📊 SUMMARY DASHBOARD CONTROLLER (Summary.js)
-// Registry-Filtered, Strict-Match Serial Engine & Ultra-Light Navigator
+// Registry-Filtered, Strict-Match Serial Engine & Column 1 Click Navigator
 // =========================================================================
 
 /**
@@ -113,7 +113,6 @@ function runFullSystemIndexer() {
   var filesIterator = folder.getFiles();
   var uncachedList = [];
 
-  // 1. Identify Uncached Files
   while (filesIterator.hasNext()) {
     var f = filesIterator.next();
     var fName = f.getName();
@@ -138,7 +137,6 @@ function runFullSystemIndexer() {
 
   var indexedThisRun = 0;
 
-  // 2. Process Files Until 4-Minute Safety Window
   for (var i = 0; i < uncachedList.length; i++) {
     var elapsed = new Date().getTime() - startTime;
     if (elapsed > MAX_EXECUTION_TIME) {
@@ -158,7 +156,6 @@ function runFullSystemIndexer() {
 
       var isTrackedPart = (Object.keys(validModels).length === 0) || validModels[baseModel.toUpperCase()];
 
-      // Only extract serials if it matches the Program Registry
       if (isTrackedPart) {
         var woLastRow = woSheet.getLastRow();
         if (woLastRow >= 12) {
@@ -171,7 +168,7 @@ function runFullSystemIndexer() {
           }
         }
       } else {
-        baseModel = "IGNORED_PART"; // Tags it to be skipped permanently
+        baseModel = "IGNORED_PART";
         bomRev = "-";
       }
 
@@ -221,7 +218,6 @@ function buildSummaryDashboard() {
 
   var BASELINE_WO_FLOOR = 1608;
 
-  // STEP 1: Auto-Detect Column Indices for Master Dyno Log
   var logHeaders = logData[0] || [];
   var colTrueSerial = (logCols.TRUE_SERIAL || 3) - 1;
   var colOverallStatus = (logCols.OVERALL_STATUS || 21) - 1;
@@ -236,7 +232,6 @@ function buildSummaryDashboard() {
     if (hText.indexOf("TIME") !== -1 || hText.indexOf("DATE") !== -1) colTimestamp = c;
   }
 
-  // STEP 2: Index Dyno Runs by Full Key AND Trailing Short Suffixes
   var allRunsBySerial = {};
   for (var r = 1; r < logData.length; r++) {
     var rawSerial = String(logData[r][colTrueSerial] || "").trim();
@@ -254,11 +249,9 @@ function buildSummaryDashboard() {
     }
   }
 
-  // STEP 3: Load Persistent Cache
   var propsService = PropertiesService.getScriptProperties();
   var allProps = propsService.getProperties();
 
-  // STEP 4: Scan Drive Folder Files
   var filesIterator = folder.getFiles();
   var fileList = [];
 
@@ -282,7 +275,6 @@ function buildSummaryDashboard() {
   var fontColors = [];
   var fontWeights = [];
 
-  // STEP 5: Process Summary Table Matrix
   for (var i = 0; i < fileList.length; i++) {
     var item = fileList[i];
     var fileId = item.id;
@@ -309,7 +301,6 @@ function buildSummaryDashboard() {
       bomRev = "-";
     }
 
-    // 🔥 REGISTRY FILTER: Skip kits, service parts, and removed parts dynamically
     if (baseModel === "IGNORED_PART") continue;
     if (baseModel !== "PENDING CACHE" && Object.keys(validModels).length > 0 && !validModels[baseModel.toUpperCase()]) {
       continue;
@@ -322,15 +313,12 @@ function buildSummaryDashboard() {
     var activeHoldCount = 0;
     var activeFailureDetails = [];
     var lastDate = null;
-    
-    // Strict Work Order matching boundary
     var woNumClean = cleanKey(item.woNum || woNumber);
 
     for (var es = 0; es < expectedSerials.length; es++) {
       var expS = expectedSerials[es];
       var cExp = cleanKey(expS);
 
-      // Multi-Tier Matching Engine
       var runs = allRunsBySerial[cExp];
 
       if (!runs || runs.length === 0) {
@@ -419,7 +407,6 @@ function buildSummaryDashboard() {
     fontWeights.push(["bold", "bold", "normal", "normal", "normal", "normal", "normal", "normal"]);
   }
 
-  // STEP 6: Single Bulk Render to Summary Sheet
   var maxRows = Math.max(summarySheet.getLastRow() - 1, 1);
   summarySheet.getRange(2, 1, maxRows, 8).clearContent().setBackground(null).setFontColor(null).setFontWeight("normal");
 
@@ -445,14 +432,14 @@ function clearWoSummaryCache() {
 }
 
 /**
- * Ultra-Lightweight Column 1 Click Navigator.
- * Writing to C3 will let Operator_Station.js naturally handle the heavy logic in the background.
+ * Interactive Column 1 Click Navigator.
+ * Switches tab focus to Operator_Station, populates C3, flushes changes,
+ * and executes manageOperatorStation smoothly.
  */
 function onSelectionChange(e) {
   if (!e || !e.range) return;
   var range = e.range;
   
-  // Guard: Ignore multi-cell selections or drag-highlighting to prevent freezing
   if (range.getNumRows() > 1 || range.getNumColumns() > 1) return;
 
   var sheet = range.getSheet();
@@ -460,26 +447,40 @@ function onSelectionChange(e) {
     var col = range.getColumn();
     var row = range.getRow();
 
-    // Trigger strictly on single clicks in Column 1 (Work_Order_Status) below the header
     if (col === 1 && row > 1) {
       var rawVal = String(sheet.getRange(row, 2).getValue()).trim();
       if (!rawVal || rawVal.startsWith("⚠️") || rawVal.startsWith("❌")) return;
 
-      // Extract pure numeric batch number (e.g. "WO-002038" -> 2038)
       var woBatch = robustExtractWoBatchNum(rawVal);
       if (woBatch === 0) return;
 
-      var ss = e.source;
+      var ss = e.source || SpreadsheetApp.getActiveSpreadsheet();
       var opSheet = ss.getSheetByName(CONFIG.SHEET_NAMES.OPERATOR_STATION);
 
       if (opSheet) {
-        var targetCell = (CONFIG.OPERATOR_STATION && CONFIG.OPERATOR_STATION.RANGES && CONFIG.OPERATOR_STATION.RANGES.BARCODE_INPUT) ? CONFIG.OPERATOR_STATION.RANGES.BARCODE_INPUT : "C3";
+        var targetCellKey = (CONFIG.OPERATOR_STATION && CONFIG.OPERATOR_STATION.RANGES && CONFIG.OPERATOR_STATION.RANGES.BARCODE_INPUT) ? CONFIG.OPERATOR_STATION.RANGES.BARCODE_INPUT : "C3";
+        var targetRange = opSheet.getRange(targetCellKey);
         
-        // 1. Write clean WO number directly to C3
-        opSheet.getRange(targetCell).setValue(woBatch);
-        
-        // 2. Switch sheet instantly WITHOUT running heavy scripts on the UI thread
+        // 1. Switch active sheet focus FIRST so manageOperatorStation targets the right context
         ss.setActiveSheet(opSheet);
+        
+        // 2. Set C3 value and flush immediately to commit the change in Google's state engine
+        targetRange.setValue(String(woBatch));
+        SpreadsheetApp.flush();
+        
+        // 3. Trigger manageOperatorStation with the active sheet context established
+        if (typeof manageOperatorStation === "function") {
+          try {
+            manageOperatorStation({
+              source: ss,
+              range: targetRange,
+              value: String(woBatch),
+              oldValue: ""
+            });
+          } catch (err) {
+            Logger.log("Operator Station execution alert: " + err.toString());
+          }
+        }
       }
     }
   }
