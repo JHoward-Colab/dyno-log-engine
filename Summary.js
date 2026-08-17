@@ -1,8 +1,18 @@
 // =========================================================================
 // 📊 SUMMARY DASHBOARD CONTROLLER (Summary.js)
-// Registry-Filtered, Self-Healing Backlog Indexer & Dashboard Navigator
+// Registry-Filtered, Multi-Tier Serial Matching Backlog Engine
 // =========================================================================
 
+/**
+ * Standardized alphanumeric string cleaner.
+ */
+function cleanKey(str) {
+  return String(str || "").toUpperCase().replace(/[^A-Z0-9]/g, "").trim();
+}
+
+/**
+ * Robustly extracts WO batch number from barcodes, short serials, or file names.
+ */
 function robustExtractWoBatchNum(strVal) {
   var s = String(strVal || "").trim();
   if (!s) return 0;
@@ -30,7 +40,6 @@ function isValidCache(jsonStr) {
   if (!jsonStr) return false;
   try {
     var data = JSON.parse(jsonStr);
-    // "IGNORED_PART" is a valid cached state for kits/service parts
     return data && data.bm && data.bm !== "PENDING CACHE" && data.bm !== "ERROR" && data.bm !== "";
   } catch (e) {
     return false;
@@ -38,7 +47,7 @@ function isValidCache(jsonStr) {
 }
 
 /**
- * Retrieves valid part numbers from the Program_Registry to filter Work Orders.
+ * Retrieves valid part numbers from Program_Registry to filter Work Orders.
  */
 function getValidRegistryModels(ss) {
   var validBaseModels = {};
@@ -48,7 +57,6 @@ function getValidRegistryModels(ss) {
   var regData = registrySheet.getDataRange().getValues();
   if (regData.length < 2) return validBaseModels;
 
-  // Auto-detect the Part Number/Base Model column
   var bmColIdx = 0;
   var headers = regData[0];
   for (var c = 0; c < headers.length; c++) {
@@ -67,119 +75,7 @@ function getValidRegistryModels(ss) {
 }
 
 /**
- * One-Click Reset & Full Re-index (Clears cache and forces clean Registry-filtered indexing)
- */
-function resetAndReindexAll() {
-  Logger.log("🧹 Clearing old cache to apply Registry Filters...");
-  clearWoSummaryCache();
-  Logger.log("🚀 Starting clean indexing pass...");
-  runFullSystemIndexer();
-}
-
-/**
- * Smart-Targeted Indexer with 4-Minute Safety Valve & Registry Filtering.
- */
-function runFullSystemIndexer() {
-  var startTime = new Date().getTime();
-  var MAX_EXECUTION_TIME = 240000; // 4 minutes
-  
-  var ss = SpreadsheetApp.getActiveSpreadsheet();
-  var validModels = getValidRegistryModels(ss);
-
-  var folderId = CONFIG.FOLDERS.WORK_ORDER_FOLDER_ID;
-  if (!folderId) {
-    Logger.log("❌ Error: WORK_ORDER_FOLDER_ID not set.");
-    return;
-  }
-
-  var folder = DriveApp.getFolderById(folderId);
-  var BASELINE_WO_FLOOR = 1608;
-
-  var propsService = PropertiesService.getScriptProperties();
-  var allProps = propsService.getProperties();
-
-  var filesIterator = folder.getFiles();
-  var uncachedList = [];
-
-  while (filesIterator.hasNext()) {
-    var f = filesIterator.next();
-    var fName = f.getName();
-    if (fName.indexOf(".xlsx") !== -1 && fName.indexOf("~") === 0) continue;
-
-    var fWoNum = robustExtractWoBatchNum(fName);
-    if (fWoNum > 0 && fWoNum < BASELINE_WO_FLOOR) continue;
-
-    var propKey = "WO_META_" + f.getId();
-    if (!isValidCache(allProps[propKey])) {
-      uncachedList.push({ id: f.getId(), name: fName });
-    }
-  }
-
-  Logger.log("Found " + uncachedList.length + " Work Orders needing valid indexing.");
-
-  if (uncachedList.length === 0) {
-    Logger.log("✅ All Work Orders are 100% validly indexed! Refreshing dashboard...");
-    buildSummaryDashboard();
-    return;
-  }
-
-  var indexedThisRun = 0;
-
-  for (var i = 0; i < uncachedList.length; i++) {
-    var elapsed = new Date().getTime() - startTime;
-    if (elapsed > MAX_EXECUTION_TIME) {
-      Logger.log("⏱️ 4-Minute Limit Reached. Validly indexed " + indexedThisRun + " files this run.");
-      Logger.log("⚠️ Click 'Run' again to continue indexing the remaining " + (uncachedList.length - indexedThisRun) + " files.");
-      break; 
-    }
-
-    var item = uncachedList[i];
-    try {
-      var woSs = SpreadsheetApp.openById(item.id);
-      var woSheet = woSs.getSheets()[0];
-
-      var baseModel = String(woSheet.getRange("D3").getValue()).trim();
-      var bomRev = String(woSheet.getRange("D4").getValue()).trim();
-      var expectedSerials = [];
-
-      var isTrackedPart = (Object.keys(validModels).length === 0) || validModels[baseModel.toUpperCase()];
-
-      // Only extract serials if it matches the Program Registry
-      if (isTrackedPart) {
-        var woLastRow = woSheet.getLastRow();
-        if (woLastRow >= 12) {
-          var raw = woSheet.getRange(12, 1, woLastRow - 11, 1).getValues();
-          for (var s = 0; s < raw.length; s++) {
-            var v = String(raw[s][0] || "").trim();
-            if (v && v.toLowerCase() !== "undefined" && v.toLowerCase() !== "null") {
-              expectedSerials.push(v);
-            }
-          }
-        }
-      } else {
-        baseModel = "IGNORED_PART"; // Tags it to be skipped permanently
-        bomRev = "-";
-      }
-
-      if (baseModel && baseModel !== "undefined") {
-        var payloadStr = JSON.stringify({ bm: baseModel, br: bomRev, es: expectedSerials });
-        propsService.setProperty("WO_META_" + item.id, payloadStr);
-        indexedThisRun++;
-        Logger.log("Indexed (" + indexedThisRun + "/" + uncachedList.length + "): " + item.name + " -> " + baseModel);
-      }
-
-    } catch (err) {
-      Logger.log("Failed to index " + item.name + ": " + err.toString());
-    }
-  }
-
-  Logger.log("Updating Summary tab dashboard...");
-  buildSummaryDashboard();
-  SpreadsheetApp.flush();
-}
-
-/**
- * Standard Dashboard Builder with Dynamic Registry Filtering.
+ * Rebuilds the Summary Dashboard using multi-tier serial lookup.
  */
 function buildSummaryDashboard() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -189,7 +85,6 @@ function buildSummaryDashboard() {
   if (!summarySheet || !logSheet) return;
 
   var validModels = getValidRegistryModels(ss);
-
   var folderId = CONFIG.FOLDERS.WORK_ORDER_FOLDER_ID;
   if (!folderId) return;
 
@@ -207,22 +102,44 @@ function buildSummaryDashboard() {
 
   var BASELINE_WO_FLOOR = 1608;
 
-  // STEP 1: Group Dyno Runs Chronologically
+  // STEP 1: Auto-Detect Column Indices for Master Dyno Log
+  var logHeaders = logData[0] || [];
+  var colTrueSerial = (logCols.TRUE_SERIAL || 3) - 1;
+  var colOverallStatus = (logCols.OVERALL_STATUS || 21) - 1;
+  var colDiagnostics = (logCols.DIAGNOSTICS || 22) - 1;
+  var colTimestamp = (logCols.TIMESTAMP || 1) - 1;
+
+  for (var c = 0; c < logHeaders.length; c++) {
+    var hText = String(logHeaders[c]).toUpperCase().trim();
+    if (hText.indexOf("TRUE_SERIAL") !== -1 || hText === "SERIAL") colTrueSerial = c;
+    if (hText.indexOf("OVERALL") !== -1) colOverallStatus = c;
+    if (hText.indexOf("DIAG") !== -1) colDiagnostics = c;
+    if (hText.indexOf("TIME") !== -1 || hText.indexOf("DATE") !== -1) colTimestamp = c;
+  }
+
+  // STEP 2: Index Dyno Runs by Full Key AND Trailing Short Suffixes
   var allRunsBySerial = {};
   for (var r = 1; r < logData.length; r++) {
-    var rawSerial = String(logData[r][(logCols.TRUE_SERIAL || 3) - 1] || "").trim();
+    var rawSerial = String(logData[r][colTrueSerial] || "").trim();
     if (rawSerial) {
       var cSer = cleanKey(rawSerial);
       if (!allRunsBySerial[cSer]) allRunsBySerial[cSer] = [];
       allRunsBySerial[cSer].push(logData[r]);
+
+      if (cSer.length >= 3) {
+        var s3 = cSer.slice(-3);
+        var shortKey = "SHORT_" + s3;
+        if (!allRunsBySerial[shortKey]) allRunsBySerial[shortKey] = [];
+        allRunsBySerial[shortKey].push(logData[r]);
+      }
     }
   }
 
-  // STEP 2: Load Properties
+  // STEP 3: Load Persistent Cache
   var propsService = PropertiesService.getScriptProperties();
   var allProps = propsService.getProperties();
 
-  // STEP 3: File Enumeration
+  // STEP 4: Scan Drive Folder Files
   var filesIterator = folder.getFiles();
   var fileList = [];
 
@@ -237,7 +154,6 @@ function buildSummaryDashboard() {
     fileList.push({ id: f.getId(), name: fName, woNum: fWoNum });
   }
 
-  // STEP 4: Sort Ascending
   fileList.sort(function(a, b) {
     return (a.woNum !== b.woNum && a.woNum > 0 && b.woNum > 0) ? (a.woNum - b.woNum) : a.name.localeCompare(b.name);
   });
@@ -247,7 +163,7 @@ function buildSummaryDashboard() {
   var fontColors = [];
   var fontWeights = [];
 
-  // STEP 5: Matrix Processing
+  // STEP 5: Process Summary Table Matrix
   for (var i = 0; i < fileList.length; i++) {
     var item = fileList[i];
     var fileId = item.id;
@@ -274,7 +190,6 @@ function buildSummaryDashboard() {
       bomRev = "-";
     }
 
-    // 🔥 REGISTRY FILTER: Skip kits, service parts, and removed parts dynamically
     if (baseModel === "IGNORED_PART") continue;
     if (baseModel !== "PENDING CACHE" && Object.keys(validModels).length > 0 && !validModels[baseModel.toUpperCase()]) {
       continue;
@@ -291,20 +206,42 @@ function buildSummaryDashboard() {
     for (var es = 0; es < expectedSerials.length; es++) {
       var expS = expectedSerials[es];
       var cExp = cleanKey(expS);
-      var runs = allRunsBySerial[cExp] || [];
 
-      if (runs.length > 0) {
+      // Multi-Tier Matching Engine
+      var runs = allRunsBySerial[cExp];
+
+      if (!runs || runs.length === 0) {
+        var woNumClean = cleanKey(item.woNum || woNumber);
+        runs = allRunsBySerial[woNumClean + cExp] || allRunsBySerial["WO" + woNumClean + cExp];
+      }
+
+      if (!runs || runs.length === 0) {
+        var expS3 = cExp.slice(-3);
+        if (expS3.length === 3) {
+          var potentialRuns = allRunsBySerial["SHORT_" + expS3] || [];
+          if (potentialRuns.length > 0) {
+            var woSearch = String(item.woNum || woNumber).toUpperCase();
+            runs = potentialRuns.filter(function(runRow) {
+              var rowStr = runRow.join(" ").toUpperCase();
+              return rowStr.indexOf(woSearch) !== -1;
+            });
+            if (runs.length === 0) runs = potentialRuns; // Fallback to short suffix match
+          }
+        }
+      }
+
+      if (runs && runs.length > 0) {
         testedCount++;
 
         var firstRun = runs[0];
-        if (String(firstRun[(logCols.OVERALL_STATUS || 21) - 1] || "").toUpperCase().includes("PASS")) {
+        if (String(firstRun[colOverallStatus] || "").toUpperCase().includes("PASS")) {
           firstPassCount++;
         }
 
         var latestRun = runs[runs.length - 1];
-        var latestOverall = String(latestRun[(logCols.OVERALL_STATUS || 21) - 1] || "").toUpperCase();
-        var latestDiag = String(latestRun[(logCols.DIAGNOSTICS || 22) - 1] || "");
-        var runDate = latestRun[(logCols.TIMESTAMP || 1) - 1];
+        var latestOverall = String(latestRun[colOverallStatus] || "").toUpperCase();
+        var latestDiag = String(latestRun[colDiagnostics] || "");
+        var runDate = latestRun[colTimestamp];
 
         if (runDate instanceof Date && (!lastDate || runDate > lastDate)) {
           lastDate = runDate;
@@ -362,7 +299,7 @@ function buildSummaryDashboard() {
     fontWeights.push(["bold", "bold", "normal", "normal", "normal", "normal", "normal", "normal"]);
   }
 
-  // STEP 6: Render Sheet
+  // STEP 6: Single Bulk Render to Summary Sheet
   var maxRows = Math.max(summarySheet.getLastRow() - 1, 1);
   summarySheet.getRange(2, 1, maxRows, 8).clearContent().setBackground(null).setFontColor(null).setFontWeight("normal");
 
@@ -376,20 +313,102 @@ function buildSummaryDashboard() {
 }
 
 /**
- * Flushes all cached metadata.
+ * Smart-Targeted Indexer with 4-Minute Safety Valve & Registry Filtering.
  */
+function runFullSystemIndexer() {
+  var startTime = new Date().getTime();
+  var MAX_EXECUTION_TIME = 240000;
+  
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var validModels = getValidRegistryModels(ss);
+
+  var folderId = CONFIG.FOLDERS.WORK_ORDER_FOLDER_ID;
+  if (!folderId) return;
+
+  var folder = DriveApp.getFolderById(folderId);
+  var BASELINE_WO_FLOOR = 1608;
+
+  var propsService = PropertiesService.getScriptProperties();
+  var allProps = propsService.getProperties();
+
+  var filesIterator = folder.getFiles();
+  var uncachedList = [];
+
+  while (filesIterator.hasNext()) {
+    var f = filesIterator.next();
+    var fName = f.getName();
+    if (fName.indexOf(".xlsx") !== -1 && fName.indexOf("~") === 0) continue;
+
+    var fWoNum = robustExtractWoBatchNum(fName);
+    if (fWoNum > 0 && fWoNum < BASELINE_WO_FLOOR) continue;
+
+    var propKey = "WO_META_" + f.getId();
+    if (!isValidCache(allProps[propKey])) {
+      uncachedList.push({ id: f.getId(), name: fName });
+    }
+  }
+
+  if (uncachedList.length === 0) {
+    buildSummaryDashboard();
+    return;
+  }
+
+  var indexedThisRun = 0;
+
+  for (var i = 0; i < uncachedList.length; i++) {
+    var elapsed = new Date().getTime() - startTime;
+    if (elapsed > MAX_EXECUTION_TIME) break; 
+
+    var item = uncachedList[i];
+    try {
+      var woSs = SpreadsheetApp.openById(item.id);
+      var woSheet = woSs.getSheets()[0];
+
+      var baseModel = String(woSheet.getRange("D3").getValue()).trim();
+      var bomRev = String(woSheet.getRange("D4").getValue()).trim();
+      var expectedSerials = [];
+
+      var isTrackedPart = (Object.keys(validModels).length === 0) || validModels[baseModel.toUpperCase()];
+
+      if (isTrackedPart) {
+        var woLastRow = woSheet.getLastRow();
+        if (woLastRow >= 12) {
+          var raw = woSheet.getRange(12, 1, woLastRow - 11, 1).getValues();
+          for (var s = 0; s < raw.length; s++) {
+            var v = String(raw[s][0] || "").trim();
+            if (v && v.toLowerCase() !== "undefined" && v.toLowerCase() !== "null") {
+              expectedSerials.push(v);
+            }
+          }
+        }
+      } else {
+        baseModel = "IGNORED_PART";
+        bomRev = "-";
+      }
+
+      if (baseModel && baseModel !== "undefined") {
+        var payloadStr = JSON.stringify({ bm: baseModel, br: bomRev, es: expectedSerials });
+        propsService.setProperty("WO_META_" + item.id, payloadStr);
+        indexedThisRun++;
+      }
+
+    } catch (err) {
+      Logger.log("Failed to index " + item.name + ": " + err.toString());
+    }
+  }
+
+  buildSummaryDashboard();
+  SpreadsheetApp.flush();
+}
+
 function clearWoSummaryCache() {
   var props = PropertiesService.getScriptProperties();
   var keys = props.getKeys();
   for (var i = 0; i < keys.length; i++) {
     if (keys[i].indexOf("WO_META_") === 0) props.deleteProperty(keys[i]);
   }
-  Logger.log("Summary persistent metadata cache cleared.");
 }
 
-/**
- * Interactive Work Order Jumper.
- */
 function onSelectionChange(e) {
   if (!e || !e.range) return;
   var sheet = e.range.getSheet();
