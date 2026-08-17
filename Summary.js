@@ -127,6 +127,10 @@ function buildSummaryDashboard() {
     var fileName = item.name;
     var woNumber = fileName.replace(/\.[^/.]+$/, "").trim();
 
+    // Construct Direct Google Drive File Hyperlink
+    var fileUrl = "https://docs.google.com/spreadsheets/d/" + fileId + "/edit";
+    var woLinkFormula = '=HYPERLINK("' + fileUrl + '", "' + woNumber + '")';
+
     try {
       var baseModel = "";
       var bomRev = "";
@@ -251,7 +255,7 @@ function buildSummaryDashboard() {
 
       var rowData = new Array(8);
       rowData[(sumCols.WORK_ORDER_STATUS || 1) - 1] = woStatus;
-      rowData[(sumCols.WORK_ORDER_NUMBER || 2) - 1] = woNumber;
+      rowData[(sumCols.WORK_ORDER_NUMBER || 2) - 1] = woLinkFormula;
       rowData[(sumCols.BASE_MODEL || 3) - 1]        = baseModel;
       rowData[(sumCols.BOM_REVISION || 4) - 1]      = bomRev;
       rowData[(sumCols.TESTING_PROGRESS || 5) - 1]  = progressStr;
