@@ -59,7 +59,7 @@ function setA8Status(sheet, statusMessage) {
     a8.setBackground("#00C853").setFontColor("#FFFFFF").setFontWeight("bold");
   } else if (upper.includes("FAIL") || upper.includes("ACTION REQUIRED") || upper.includes("NOT FOUND")) {
     a8.setBackground("#D50000").setFontColor("#FFFFFF").setFontWeight("bold");
-  } else if (upper.includes("CONDITIONAL") || upper.includes("ATTENTION") || upper.includes("PENDING") || upper.includes("IN PROGRESS")) {
+  } else if (upper.includes("CONDITIONAL") || upper.includes("ATTENTION") || upper.includes("PENDING") || upper.includes("HOLD") || upper.includes("INCOMPLETE")) {
     a8.setBackground("#FFD600").setFontColor("#000000").setFontWeight("bold");
   } else {
     a8.setBackground(null).setFontColor(null).setFontWeight("normal");
@@ -117,6 +117,19 @@ function manageOperatorStation(e) {
       var woPartNumber = String(woSheet.getRange("D3").getValue()).trim(); 
       var woBomRevision = String(woSheet.getRange("D4").getValue()).trim();   
       
+      // Extract expected serial numbers from Cell A12 downwards
+      var expectedSerials = [];
+      var woLastRow = woSheet.getLastRow();
+      if (woLastRow >= 12) {
+        var rawSerials = woSheet.getRange(12, 1, woLastRow - 11, 1).getValues();
+        for (var sIdx = 0; sIdx < rawSerials.length; sIdx++) {
+          var sVal = String(rawSerials[sIdx][0] || "").trim();
+          if (sVal && sVal.toLowerCase() !== "undefined" && sVal.toLowerCase() !== "null") {
+            expectedSerials.push(sVal);
+          }
+        }
+      }
+
       sheet.getRange(ranges.BOM_REV_OUTPUT).setValue(woBomRevision); 
       sheet.getRange(ranges.BASE_MODEL_OUTPUT).setValue(woPartNumber);   
 
@@ -156,7 +169,7 @@ function manageOperatorStation(e) {
       }
 
       populateSpecLimits(ss, sheet, matchedDynamicKey || matchedProgramName || woPartNumber);
-      renderOperatorTableWithFormatting(ss, sheet, searchBarcode, woPartNumber);
+      renderOperatorTableWithFormatting(ss, sheet, searchBarcode, woPartNumber, expectedSerials);
 
     } catch(e) {
       Logger.log("WO Lookup Error: " + e.toString());
@@ -232,22 +245,18 @@ function populateSpecLimits(ss, sheet, dynamicKeyOrPart) {
 }
 
 /**
- * Queries Master_Dyno_Log and renders records in the exact 12-column UI table layout (A26:L100).
+ * Queries Master_Dyno_Log, cross-references against Work Order expected serials, and renders table A27 downward.
  */
-function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber) {
+function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber, expectedSerials) {
   var logSheet = ss.getSheetByName(CONFIG.SHEET_NAMES.MASTER_DYNO_LOG);
   if (!logSheet) return;
 
   var logData = logSheet.getDataRange().getValues();
-  if (logData.length <= 1) {
-    setA8Status(sheet, "PENDING TESTING");
-    return;
-  }
-
-  var hMap = buildHeaderMap(logData[0]);
   var logCols = CONFIG.COLUMNS.MASTER_DYNO_LOG || {};
   var ranges = CONFIG.OPERATOR_STATION.RANGES;
   var logSheetId = logSheet.getSheetId();
+
+  var hMap = buildHeaderMap(logData[0] || []);
 
   var limits = {
     c1Min: parseFloat(sheet.getRange(ranges.LIMIT_COMP_1_MIN).getValue()),
@@ -270,80 +279,157 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber)
 
   var latestLogBySerial = {};
 
-  for (var r = 1; r < logData.length; r++) {
-    var row = logData[r];
-    var trueSerial = String(getLogVal(row, logCols.TRUE_SERIAL, 2) || "").trim();
-    var baseModel = cleanKey(getLogVal(row, logCols.BASE_MODEL, 3));
-    var cleanSerial = cleanKey(trueSerial);
+  if (logData.length > 1) {
+    for (var r = 1; r < logData.length; r++) {
+      var row = logData[r];
+      var trueSerial = String(getLogVal(row, logCols.TRUE_SERIAL, 2) || "").trim();
+      var baseModel = cleanKey(getLogVal(row, logCols.BASE_MODEL, 3));
+      var cleanSerial = cleanKey(trueSerial);
 
-    var isMatch = false;
-    if (cleanBarcodeStr !== "" && cleanSerial.includes(cleanBarcodeStr)) {
-      isMatch = true;
-    } else if (cleanPartStr !== "" && baseModel === cleanPartStr && (cleanBarcodeStr === "" || cleanBarcodeStr === "undefined")) {
-      isMatch = true;
-    }
+      var isMatch = false;
+      if (cleanBarcodeStr !== "" && cleanSerial.includes(cleanBarcodeStr)) {
+        isMatch = true;
+      } else if (cleanPartStr !== "" && baseModel === cleanPartStr && (cleanBarcodeStr === "" || cleanBarcodeStr === "undefined")) {
+        isMatch = true;
+      }
 
-    if (isMatch && trueSerial !== "") {
-      latestLogBySerial[cleanSerial] = {
-        rowIdx: r + 1,
-        data: row,
-        trueSerial: trueSerial
-      };
+      if (isMatch && trueSerial !== "") {
+        latestLogBySerial[cleanSerial] = {
+          rowIdx: r + 1,
+          data: row,
+          trueSerial: trueSerial
+        };
+      }
     }
   }
 
-  var rowsToDisplay = [];
-  var test1FailCount = 0;
-  var test2FailCount = 0;
+  // Combine expected Work Order serials with tested Dyno Log serials
+  var itemsToProcess = [];
+  var processedCleanSerials = {};
 
-  var serialKeys = Object.keys(latestLogBySerial).sort(function(a, b) {
-    var mA = a.match(/(\d+)$/);
-    var mB = b.match(/(\d+)$/);
+  if (expectedSerials && expectedSerials.length > 0) {
+    for (var eIdx = 0; eIdx < expectedSerials.length; eIdx++) {
+      var expSerial = expectedSerials[eIdx];
+      var cleanExp = cleanKey(expSerial);
+      processedCleanSerials[cleanExp] = true;
+
+      if (latestLogBySerial[cleanExp]) {
+        itemsToProcess.push({
+          trueSerial: latestLogBySerial[cleanExp].trueSerial,
+          isTested: true,
+          data: latestLogBySerial[cleanExp].data,
+          rowIdx: latestLogBySerial[cleanExp].rowIdx
+        });
+      } else {
+        itemsToProcess.push({
+          trueSerial: expSerial,
+          isTested: false,
+          data: null,
+          rowIdx: -1
+        });
+      }
+    }
+  }
+
+  // Append any additional tested serials found in Dyno Log not explicitly in A12+
+  var logSerialKeys = Object.keys(latestLogBySerial);
+  for (var lIdx = 0; lIdx < logSerialKeys.length; lIdx++) {
+    var k = logSerialKeys[lIdx];
+    if (!processedCleanSerials[k]) {
+      itemsToProcess.push({
+        trueSerial: latestLogBySerial[k].trueSerial,
+        isTested: true,
+        data: latestLogBySerial[k].data,
+        rowIdx: latestLogBySerial[k].rowIdx
+      });
+    }
+  }
+
+  // Sort items numerically by serial suffix
+  itemsToProcess.sort(function(a, b) {
+    var mA = String(a.trueSerial).match(/(\d+)$/);
+    var mB = String(b.trueSerial).match(/(\d+)$/);
     var uA = mA ? parseInt(mA[1], 10) : 0;
     var uB = mB ? parseInt(mB[1], 10) : 0;
     return uA - uB;
   });
 
-  for (var k = 0; k < serialKeys.length; k++) {
-    var item = latestLogBySerial[serialKeys[k]];
-    var row = item.data;
-    var actualSheetRow = item.rowIdx;
+  var rowsToDisplay = [];
+  var test1FailCount = 0;
+  var test2FailCount = 0;
+  var holdCount = 0;
+  var testedCount = 0;
+  var untestedCount = 0;
+
+  for (var i = 0; i < itemsToProcess.length; i++) {
+    var item = itemsToProcess[i];
     var trueSerial = item.trueSerial;
 
-    var rowLink = "#gid=" + logSheetId + "&range=A" + actualSheetRow;
-    var serialHyperlinkFormula = '=HYPERLINK("' + rowLink + '", "' + trueSerial + '")';
+    if (item.isTested) {
+      testedCount++;
+      var row = item.data;
+      var actualSheetRow = item.rowIdx;
 
-    var t1Status    = String(row[hMap.test1Status] || "").trim();
-    var t2Status    = String(row[hMap.test2Status] || "").trim();
-    var overallStat = String(row[hMap.overallStatus] || "").trim();
-    var diagnostics = String(row[hMap.diagnostics] || "").trim();
-    var evalAction  = String(row[hMap.evaluationAction] || "").trim();
-    var engComm     = String(row[hMap.engComments] || "").trim();
+      var rowLink = "#gid=" + logSheetId + "&range=A" + actualSheetRow;
+      var serialHyperlinkFormula = '=HYPERLINK("' + rowLink + '", "' + trueSerial + '")';
 
-    if (t1Status.toUpperCase().includes("FAIL")) test1FailCount++;
-    if (t2Status.toUpperCase().includes("FAIL")) test2FailCount++;
+      var t1Status    = String(row[hMap.test1Status] || "").trim();
+      var t2Status    = String(row[hMap.test2Status] || "").trim();
+      var overallStat = String(row[hMap.overallStatus] || "").trim();
+      var diagnostics = String(row[hMap.diagnostics] || "").trim();
+      var evalAction  = String(row[hMap.evaluationAction] || "").trim();
+      var engComm     = String(row[hMap.engComments] || "").trim();
 
-    var mappedRow = [
-      serialHyperlinkFormula,                           // Col A (1)
-      safeAbsNum(getLogVal(row, logCols.ROD_FORCE, 5)), // Col B (2)
-      safeAbsNum(getLogVal(row, logCols.COMP_1, 7)),    // Col C (3)
-      safeAbsNum(getLogVal(row, logCols.REB_1, 8)),     // Col D (4)
-      safeAbsNum(getLogVal(row, logCols.COMP_2, 12)),   // Col E (5)
-      safeAbsNum(getLogVal(row, logCols.REB_2, 13)),    // Col F (6)
-      t1Status,                                         // Col G (7)
-      t2Status,                                         // Col H (8)
-      overallStat,                                      // Col I (9)
-      evalAction,                                       // Col J (10)
-      diagnostics,                                      // Col K (11)
-      engComm                                           // Col L (12)
-    ];
+      if (overallStat.toUpperCase().includes("HOLD")) holdCount++;
+      if (t1Status.toUpperCase().includes("FAIL")) test1FailCount++;
+      if (t2Status.toUpperCase().includes("FAIL")) test2FailCount++;
 
-    rowsToDisplay.push(mappedRow);
+      var mappedRow = [
+        serialHyperlinkFormula,                           // Col A (1): Serial
+        safeAbsNum(getLogVal(row, logCols.ROD_FORCE, 5)), // Col B (2): Rod Force
+        safeAbsNum(getLogVal(row, logCols.COMP_1, 7)),    // Col C (3): Low Speed Comp
+        safeAbsNum(getLogVal(row, logCols.REB_1, 8)),     // Col D (4): Low Speed Reb
+        safeAbsNum(getLogVal(row, logCols.COMP_2, 12)),   // Col E (5): Med Speed Comp
+        safeAbsNum(getLogVal(row, logCols.REB_2, 13)),    // Col F (6): Med Speed Reb
+        t1Status,                                         // Col G (7): Test 1 Status
+        t2Status,                                         // Col H (8): Test 2 Status
+        overallStat,                                      // Col I (9): Overall Status
+        evalAction,                                       // Col J (10): Evaluation Action
+        diagnostics,                                      // Col K (11): Diagnostics
+        engComm                                           // Col L (12): Engineering Comments
+      ];
+      rowsToDisplay.push(mappedRow);
+    } else {
+      untestedCount++;
+      var mappedRow = [
+        trueSerial,                                       // Col A (1): Serial
+        "",                                               // Col B (2): Rod Force
+        "",                                               // Col C (3): Low Speed Comp
+        "",                                               // Col D (4): Low Speed Reb
+        "",                                               // Col E (5): Med Speed Comp
+        "",                                               // Col F (6): Med Speed Reb
+        "NOT TESTED YET",                                 // Col G (7): Test 1 Status
+        "NOT TESTED YET",                                 // Col H (8): Test 2 Status
+        "NOT TESTED YET",                                 // Col I (9): Overall Status
+        "",                                               // Col J (10): Evaluation Action
+        "⏳ Unit pending dyno test.",                     // Col K (11): Diagnostics
+        ""                                                // Col L (12): Engineering Comments
+      ];
+      rowsToDisplay.push(mappedRow);
+    }
   }
 
   var statusMessage = "";
-  if (rowsToDisplay.length === 0) {
+  var totalCount = itemsToProcess.length;
+
+  if (totalCount === 0) {
     statusMessage = "PENDING TESTING";
+  } else if (testedCount === 0) {
+    statusMessage = "PENDING TESTING: 0 of " + totalCount + " Tested";
+  } else if (untestedCount > 0) {
+    statusMessage = "INCOMPLETE WORK ORDER: " + testedCount + " of " + totalCount + " Tested (" + untestedCount + " Unit(s) Missing)";
+  } else if (holdCount > 0) {
+    statusMessage = "HOLD: Action Required (" + holdCount + " unit(s) marked for Retest/Teardown)";
   } else if (test1FailCount > 0) {
     statusMessage = "ACTION REQUIRED: Test 1 Failure Detected (" + test1FailCount + " unit(s))";
   } else if (test2FailCount > 0) {
@@ -385,7 +471,7 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber)
       rowBg[colIndex] = "#FADBD8";        
     };
 
-    if (!diagnosticsStr.includes("✅")) {
+    if (!diagnosticsStr.includes("✅") && !diagnosticsStr.includes("⏳")) {
       if (diagnosticsStr.indexOf("[RF_FAIL]") !== -1)    applyFaultHighlight(1);
       if (diagnosticsStr.indexOf("[C1_FAIL]") !== -1)    applyFaultHighlight(2);
       if (diagnosticsStr.indexOf("[R1_FAIL]") !== -1)    applyFaultHighlight(3);
@@ -408,16 +494,22 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber)
       rowBg[6] = "#FADBD8"; rowFont[6] = "#C0392B"; rowWeight[6] = "bold";
     } else if (t1StatusStr.includes("PASS")) {
       rowBg[6] = "#D4EFDF"; rowFont[6] = "#196F3D";
+    } else if (t1StatusStr.includes("NOT TESTED")) {
+      rowBg[6] = "#F2F4F4"; rowFont[6] = "#5D6D7E";
     }
 
     if (t2StatusStr.includes("FAIL")) {
       rowBg[7] = "#FADBD8"; rowFont[7] = "#C0392B"; rowWeight[7] = "bold";
     } else if (t2StatusStr.includes("PASS")) {
       rowBg[7] = "#D4EFDF"; rowFont[7] = "#196F3D";
+    } else if (t2StatusStr.includes("NOT TESTED")) {
+      rowBg[7] = "#F2F4F4"; rowFont[7] = "#5D6D7E";
     }
 
     if (overallStatStr.includes("FAIL")) {
       rowBg[8] = "#C0392B"; rowFont[8] = "#FFFFFF"; rowWeight[8] = "bold";
+    } else if (overallStatStr.includes("HOLD") || overallStatStr.includes("NOT TESTED")) {
+      rowBg[8] = "#FCF3CF"; rowFont[8] = "#B7950B"; rowWeight[8] = "bold";
     } else if (overallStatStr.includes("OVERRIDE") || overallStatStr.includes("PASS")) {
       rowBg[8] = "#D4EFDF"; rowFont[8] = "#196F3D"; rowWeight[8] = "bold";
     }
