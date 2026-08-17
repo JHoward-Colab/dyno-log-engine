@@ -1,6 +1,6 @@
 // =========================================================================
 // 📊 SUMMARY DASHBOARD CONTROLLER (Summary.js)
-// Registry-Filtered, Strict-Match Serial Engine & Checkbox Row Jumper
+// Registry-Filtered, Strict-Match Serial Engine & Column 1 Click Navigator
 // =========================================================================
 
 function cleanKey(str) {
@@ -289,7 +289,6 @@ function buildSummaryDashboard() {
         runs = allRunsBySerial[woNumClean + cExp] || allRunsBySerial["WO" + woNumClean + cExp];
       }
 
-      // 🔥 STRICT MATCH FIX: Eliminates phantom 2038 tests.
       if (!runs || runs.length === 0) {
         var expS3 = cExp.slice(-3);
         if (expS3.length === 3) {
@@ -356,8 +355,7 @@ function buildSummaryDashboard() {
     var dateStr = lastDate ? Utilities.formatDate(lastDate, Session.getScriptTimeZone(), "yyyy-MM-dd HH:mm") : "N/A";
     var detailsStr = activeFailureDetails.length > 0 ? activeFailureDetails.join(", ") : (testedCount === totalQty && totalQty > 0 ? "✅ All Units Passed" : "⏳ Pending dyno test");
 
-    // Array is now size 9 to fit the Checkbox
-    var rowData = new Array(9);
+    var rowData = new Array(8);
     rowData[(sumCols.WORK_ORDER_STATUS || 1) - 1] = woStatus;
     rowData[(sumCols.WORK_ORDER_NUMBER || 2) - 1] = woLinkFormula;
     rowData[(sumCols.BASE_MODEL || 3) - 1]        = baseModel;
@@ -366,28 +364,23 @@ function buildSummaryDashboard() {
     rowData[(sumCols.STATUS_DETAILS || 6) - 1]    = detailsStr;
     rowData[(sumCols.FIRST_PASS_YIELD || 7) - 1]  = fpyStr;
     rowData[(sumCols.LAST_TESTED_DATE || 8) - 1]  = dateStr;
-    rowData[8] = false; // Checkbox column defaults to false (unchecked)
 
     tableOutput.push(rowData);
-    bgColors.push([statusBg, "#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF"]);
-    fontColors.push([statusFont, "#0000FF", "#000000", "#000000", "#000000", "#000000", "#000000", "#000000", "#000000"]);
-    fontWeights.push(["bold", "bold", "normal", "normal", "normal", "normal", "normal", "normal", "normal"]);
+    bgColors.push([statusBg, "#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF"]);
+    fontColors.push([statusFont, "#0000FF", "#000000", "#000000", "#000000", "#000000", "#000000", "#000000"]);
+    fontWeights.push(["bold", "bold", "normal", "normal", "normal", "normal", "normal", "normal"]);
   }
 
-  // Render 9 Columns (Includes Checkbox Column)
+  // Render 8 Columns
   var maxRows = Math.max(summarySheet.getLastRow() - 1, 1);
-  summarySheet.getRange(2, 1, maxRows, 9).clearContent().setBackground(null).setFontColor(null).setFontWeight("normal").clearDataValidations();
+  summarySheet.getRange(2, 1, maxRows, 8).clearContent().setBackground(null).setFontColor(null).setFontWeight("normal").clearDataValidations();
 
   if (tableOutput.length > 0) {
-    var targetRange = summarySheet.getRange(2, 1, tableOutput.length, 9);
+    var targetRange = summarySheet.getRange(2, 1, tableOutput.length, 8);
     targetRange.setValues(tableOutput);
     targetRange.setBackgrounds(bgColors);
     targetRange.setFontColors(fontColors);
     targetRange.setFontWeights(fontWeights);
-
-    // Apply Checkboxes to Column 9
-    var checkboxRule = SpreadsheetApp.newDataValidation().requireCheckbox().build();
-    summarySheet.getRange(2, 9, tableOutput.length, 1).setDataValidation(checkboxRule);
   }
 }
 
@@ -400,43 +393,43 @@ function clearWoSummaryCache() {
 }
 
 /**
- * Checkbox Jumper Engine
- * Checking the box in Column 9 loads Operator_Station and immediately unchecks itself.
+ * Interactive Column 1 Click Navigator.
+ * Clicking a Work Order Status in Column 1 (Column A) extracts pure WO digits,
+ * puts them directly into cell C3 on Operator_Station, and switches tabs.
  */
-function onEdit(e) {
+function onSelectionChange(e) {
   if (!e || !e.range) return;
   var sheet = e.range.getSheet();
 
-  // Listen only on the Summary sheet, Column 9 (Checkbox column)
+  // Trigger strictly on Column 1 (Work_Order_Status) on the Summary tab
   if (sheet.getName() === CONFIG.SHEET_NAMES.SUMMARY) {
     var col = e.range.getColumn();
     var row = e.range.getRow();
 
-    if (col === 9 && row > 1) {
-      var isChecked = e.range.getValue();
+    if (col === 1 && row > 1) {
+      // Pull raw Work Order name/formula from Column 2 (Work_Order_Number)
+      var rawVal = String(sheet.getRange(row, 2).getValue()).trim();
+      if (!rawVal || rawVal.startsWith("⚠️") || rawVal.startsWith("❌")) return;
 
-      if (isChecked === true) {
-        // Instantly uncheck it so it acts like a push-button
-        e.range.setValue(false);
+      // Extract pure numeric batch number (e.g. "WO-002038" -> 2038)
+      var woBatch = robustExtractWoBatchNum(rawVal);
+      var targetVal = woBatch > 0 ? String(woBatch) : rawVal;
 
-        // Get WO string from Column 2 (Work_Order_Number)
-        var rawVal = String(sheet.getRange(row, 2).getValue()).trim();
-        if (!rawVal || rawVal.startsWith("⚠️") || rawVal.startsWith("❌")) return;
+      var ss = e.source;
+      var opSheet = ss.getSheetByName(CONFIG.SHEET_NAMES.OPERATOR_STATION);
 
-        // Strip down to pure numeric batch number (e.g., "WO-002038" -> 2038)
-        var woBatch = robustExtractWoBatchNum(rawVal);
-        var targetVal = woBatch > 0 ? String(woBatch) : rawVal;
+      if (opSheet) {
+        // Explicitly set target cell C3 on Operator_Station
+        var targetCell = (CONFIG.OPERATOR_STATION && CONFIG.OPERATOR_STATION.RANGES && CONFIG.OPERATOR_STATION.RANGES.BARCODE_INPUT) ? CONFIG.OPERATOR_STATION.RANGES.BARCODE_INPUT : "C3";
+        opSheet.getRange(targetCell).setValue(targetVal);
 
-        var ss = e.source;
-        var opSheet = ss.getSheetByName(CONFIG.SHEET_NAMES.OPERATOR_STATION);
-
-        if (opSheet) {
-          opSheet.getRange(CONFIG.OPERATOR_STATION.RANGES.BARCODE_INPUT).setValue(targetVal);
-          if (typeof manageOperatorStation === "function") {
-            manageOperatorStation({ source: ss, range: opSheet.getRange(CONFIG.OPERATOR_STATION.RANGES.BARCODE_INPUT) });
-          }
-          ss.setActiveSheet(opSheet);
+        // Run Station lookup handler if available
+        if (typeof manageOperatorStation === "function") {
+          manageOperatorStation({ source: ss, range: opSheet.getRange(targetCell) });
         }
+
+        // Switch focus to Operator_Station tab
+        ss.setActiveSheet(opSheet);
       }
     }
   }
