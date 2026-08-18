@@ -133,6 +133,27 @@ function buildMatrixHeaderMap(headerRow) {
   };
 }
 
+/**
+ * Robust Delimiter-Smart CSV/TSV Parser Helper
+ */
+function parseCsvRobust(rawStr) {
+  if (!rawStr) return [];
+  var clean = rawStr.trim();
+  if (!clean) return [];
+  var lines = clean.split(/\r?\n/);
+  var rows = [];
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i].trim();
+    if (!line) continue;
+    var delim = line.indexOf('\t') !== -1 ? '\t' : (line.indexOf(';') !== -1 ? ';' : ',');
+    var parts = line.split(delim).map(function(cell) {
+      return cell.trim().replace(/^["']|["']$/g, '');
+    });
+    rows.push(parts);
+  }
+  return rows;
+}
+
 // =========================================================================
 // ENGINE 1: ADAPTIVE DYNO PROCESSOR (DEV-SAFE STACK APPEND)
 // =========================================================================
@@ -154,7 +175,7 @@ function processDynoFiles() {
   
   while (files.hasNext()) {
     var file = files.next(); var rawName = file.getName(); var lastUpdated = file.getLastUpdated().getTime();
-    if (rawName.toLowerCase().endsWith('.csv')) {
+    if (rawName.toLowerCase().endsWith('.csv') || rawName.toLowerCase().endsWith('.txt')) {
       var fileName = rawName.replace(/\.csv$/i, "").replace(/\.txt$/i, "").trim(); var tempGroupKey = "";
       var serialMatch = rawName.match(/\d{6}-\d{3}/) || rawName.match(/\d+-\d+/);
       if (serialMatch) { tempGroupKey = serialMatch[0].trim(); } else {
@@ -209,7 +230,7 @@ function processDynoFiles() {
       if ((now.getTime() - pack.youngestFileTime) / 1000 < 4) continue;
       try {
         var rawBlobStr = pack.pvp.getBlob().getDataAsString("UTF-8").trim();
-        var pvpContent = Utilities.parseCsv(rawBlobStr); var trueSerial = tempKey;
+        var pvpContent = parseCsvRobust(rawBlobStr); var trueSerial = tempKey;
         var trueDynoProgramName = pack.parsedBaseModel;
         
         if (trueDynoProgramName.length > 20) {
@@ -238,7 +259,7 @@ function processDynoFiles() {
         var rawRodForce = 0; var intervalMetrics = [];
         for (var i = 0; i < pack.intervals.length; i++) {
           var file = pack.intervals[i]; var rawIntStr = file.getBlob().getDataAsString("UTF-8").trim();
-          if (rawIntStr === "") continue; var rows = Utilities.parseCsv(rawIntStr); var speedTarget = 0;
+          if (rawIntStr === "") continue; var rows = parseCsvRobust(rawIntStr); var speedTarget = 0;
           for (var j = 0; j < Math.min(rows.length, 15); j++) { if (rows[j][0] && rows[j][0].trim().toLowerCase() == "velocity amplitude") { speedTarget = parseInt(rows[j][1]); break; } }
           
           if (!speedTarget || isNaN(speedTarget)) {
@@ -282,12 +303,20 @@ function processDynoFiles() {
         }
         
         var pvpSlots = [{ comp: 0, reb: 0 }, { comp: 0, reb: 0 }, { comp: 0, reb: 0 }];
-        if (pvpContent.length >= 11) {
-          pvpSlots[0].comp = parseFloat(pvpContent[8][3]) || 0; pvpSlots[0].reb = parseFloat(pvpContent[8][5]) || 0;
-          pvpSlots[1].comp = parseFloat(pvpContent[9][3]) || 0; pvpSlots[1].reb = parseFloat(pvpContent[9][5]) || 0;
-          pvpSlots[2].comp = parseFloat(pvpContent[10][3]) || 0; pvpSlots[2].reb = parseFloat(pvpContent[10][5]) || 0;
+        var numericRows = [];
+        for (var pr = 0; pr < pvpContent.length; pr++) {
+          if (pvpContent[pr].length >= 4) {
+            var valComp = parseFloat(pvpContent[pr][3]);
+            var valReb = parseFloat(pvpContent[pr][5] || pvpContent[pr][4]);
+            if (!isNaN(valComp) && valComp !== 0) {
+              numericRows.push({ comp: Math.abs(valComp), reb: Math.abs(valReb || 0) });
+            }
+          }
         }
-        
+        if (numericRows.length >= 3) {
+          pvpSlots = numericRows.slice(0, 3);
+        }
+
         var outputRowArray = [];
         for (var c = 0; c < 24; c++) { outputRowArray.push(""); }
         
@@ -299,22 +328,28 @@ function processDynoFiles() {
         if (hMap.rodForce !== undefined) outputRowArray[hMap.rodForce] = rawRodForce;
         
         if (intervalMetrics[0]) {
+          var c1 = pvpSlots[0].comp || Math.abs(intervalMetrics[0].maxComp) || 0;
+          var r1 = pvpSlots[0].reb || Math.abs(intervalMetrics[0].maxReb) || 0;
           if (hMap.speed1 !== undefined) outputRowArray[hMap.speed1] = intervalMetrics[0].speed;
-          if (hMap.comp1 !== undefined) outputRowArray[hMap.comp1] = pvpSlots[0].comp;
-          if (hMap.reb1 !== undefined) outputRowArray[hMap.reb1] = pvpSlots[0].reb;
+          if (hMap.comp1 !== undefined) outputRowArray[hMap.comp1] = c1;
+          if (hMap.reb1 !== undefined) outputRowArray[hMap.reb1] = r1;
           if (hMap.slope1 !== undefined) outputRowArray[hMap.slope1] = intervalMetrics[0].slope;
           if (hMap.loopArea1 !== undefined) outputRowArray[hMap.loopArea1] = intervalMetrics[0].area;
         }
         if (intervalMetrics[1]) {
+          var c2 = pvpSlots[1].comp || Math.abs(intervalMetrics[1].maxComp) || 0;
+          var r2 = pvpSlots[1].reb || Math.abs(intervalMetrics[1].maxReb) || 0;
           if (hMap.speed2 !== undefined) outputRowArray[hMap.speed2] = intervalMetrics[1].speed;
-          if (hMap.comp2 !== undefined) outputRowArray[hMap.comp2] = pvpSlots[1].comp;
-          if (hMap.reb2 !== undefined) outputRowArray[hMap.reb2] = pvpSlots[1].reb;
+          if (hMap.comp2 !== undefined) outputRowArray[hMap.comp2] = c2;
+          if (hMap.reb2 !== undefined) outputRowArray[hMap.reb2] = r2;
           if (hMap.loopArea2 !== undefined) outputRowArray[hMap.loopArea2] = intervalMetrics[1].area;
         }
         if (intervalMetrics[2]) {
+          var c3 = pvpSlots[2].comp || Math.abs(intervalMetrics[2].maxComp) || 0;
+          var r3 = pvpSlots[2].reb || Math.abs(intervalMetrics[2].maxReb) || 0;
           if (hMap.speed3 !== undefined) outputRowArray[hMap.speed3] = intervalMetrics[2].speed;
-          if (hMap.comp3 !== undefined) outputRowArray[hMap.comp3] = pvpSlots[2].comp;
-          if (hMap.reb3 !== undefined) outputRowArray[hMap.reb3] = pvpSlots[2].reb;
+          if (hMap.comp3 !== undefined) outputRowArray[hMap.comp3] = c3;
+          if (hMap.reb3 !== undefined) outputRowArray[hMap.reb3] = r3;
         }
         if (hMap.test1Status !== undefined) outputRowArray[hMap.test1Status] = "PASS";
         if (hMap.test2Status !== undefined) outputRowArray[hMap.test2Status] = "PASS";
