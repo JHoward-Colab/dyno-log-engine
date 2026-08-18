@@ -8,14 +8,30 @@
  */
 function clickMasterSyncButton() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
-  try { processDynoFiles(); } catch(e) { Logger.log("Watch folder alert: " + e.toString()); }
-  try { retroactiveLogRecalculate(); } catch(e) { Logger.log("Reference Matrix Recalculation Alert: " + e.toString()); }
+  var ui = SpreadsheetApp.getUi();
+
+  try { 
+    processDynoFiles(); 
+  } catch(e) { 
+    Logger.log("Watch folder alert: " + e.toString());
+    ui.alert("⚠️ Sync Warning", "Process Dyno Files Error: " + e.message, ui.ButtonSet.OK);
+  }
+
+  try { 
+    retroactiveLogRecalculate(); 
+  } catch(e) { 
+    Logger.log("Reference Matrix Recalculation Alert: " + e.toString()); 
+    ui.alert("⚠️ Recalculation Warning", "Retroactive Recalculate Error: " + e.message, ui.ButtonSet.OK);
+  }
+
   try {
     var sheet = ss.getSheetByName(CONFIG.SHEET_NAMES.OPERATOR_STATION);
     if (sheet) {
       manageOperatorStation({ source: ss, range: sheet.getRange(CONFIG.OPERATOR_STATION.RANGES.BARCODE_INPUT) });
     }
-  } catch(e) { Logger.log("Console screen alert: " + e.toString()); }
+  } catch(e) { 
+    Logger.log("Console screen alert: " + e.toString()); 
+  }
 }
 
 /**

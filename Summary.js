@@ -67,10 +67,10 @@ function isSerialMatch(expSerial, logSerial) {
 }
 
 /**
- * Builds header map for Master_Dyno_Log columns.
- * Exact copy pattern from UI.js.
+ * Builds header map for Summary Dashboard columns specifically.
+ * Renamed buildSummaryHeaderMap to avoid global function collision with Engine.js.
  */
-function buildHeaderMap(headers) {
+function buildSummaryHeaderMap(headers) {
   var map = {
     trueSerial: 2,      // Col C (default)
     baseModel: 3,       // Col D (default)
@@ -246,7 +246,7 @@ function buildSummaryDashboard() {
   var sumCols = CONFIG.COLUMNS.SUMMARY || {};
   var BASELINE_WO_FLOOR = 1608;
 
-  var hMap = buildHeaderMap(logData[0] || []);
+  var hMap = buildSummaryHeaderMap(logData[0] || []);
 
   var propsService = PropertiesService.getScriptProperties();
   var allProps = propsService.getProperties();
@@ -305,7 +305,6 @@ function buildSummaryDashboard() {
       continue;
     }
 
-    // Mirror UI.js searchBarcode filtering per Work Order
     var searchBarcode = String(item.woNum || woNumber).trim();
     var cleanBarcodeStr = cleanKey(searchBarcode);
     var cleanPartStr = cleanKey(baseModel);
@@ -372,7 +371,6 @@ function buildSummaryDashboard() {
           lastDate = runDate;
         }
 
-        // Exact increment counters from renderOperatorTableWithFormatting() in UI.js
         if (overallStat.includes("HOLD")) {
           holdCount++;
           activeFailureDetails.push("#" + expS.slice(-3) + " [HOLD]");
@@ -392,7 +390,6 @@ function buildSummaryDashboard() {
       }
     }
 
-    // Exact Decision Logic from UI.js (renderOperatorTableWithFormatting / setA8Status)
     var woStatus = "PENDING";
     var statusBg = "#FCF3CF";
     var statusFont = "#B7950B";
