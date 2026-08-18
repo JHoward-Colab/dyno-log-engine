@@ -418,9 +418,19 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber,
     }
   }
 
+  // Pre-format short display serial for each item prior to sorting
+  for (var i = 0; i < itemsToProcess.length; i++) {
+    itemsToProcess[i].displaySerial = formatShortSerial(itemsToProcess[i].rawSerial, searchBarcode);
+  }
+
+  // Natural numeric sort on standardized displaySerial (e.g. 001979-001, 001979-002, 001979-010)
   itemsToProcess.sort(function(a, b) {
-    var mA = String(a.rawSerial).match(/(\d+)$/);
-    var mB = String(b.rawSerial).match(/(\d+)$/);
+    var sA = a.displaySerial || "";
+    var sB = b.displaySerial || "";
+    var cmp = sA.localeCompare(sB, undefined, { numeric: true, sensitivity: "base" });
+    if (cmp !== 0) return cmp;
+    var mA = sA.match(/(\d+)$/);
+    var mB = sB.match(/(\d+)$/);
     var uA = mA ? parseInt(mA[1], 10) : 0;
     var uB = mB ? parseInt(mB[1], 10) : 0;
     return uA - uB;
@@ -435,7 +445,7 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber,
 
   for (var i = 0; i < itemsToProcess.length; i++) {
     var item = itemsToProcess[i];
-    var displaySerial = formatShortSerial(item.rawSerial, searchBarcode);
+    var displaySerial = item.displaySerial || formatShortSerial(item.rawSerial, searchBarcode);
 
     if (item.isTested) {
       testedCount++;
