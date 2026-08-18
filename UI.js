@@ -8,20 +8,21 @@
  */
 function clickMasterSyncButton() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
-  var ui = SpreadsheetApp.getUi();
+  var ui = null;
+  try { ui = SpreadsheetApp.getUi(); } catch(err) {}
 
   try { 
     processDynoFiles(); 
   } catch(e) { 
     Logger.log("Watch folder alert: " + e.toString());
-    ui.alert("⚠️ Sync Warning", "Process Dyno Files Error: " + e.message, ui.ButtonSet.OK);
+    if (ui) ui.alert("⚠️ Sync Warning", "Process Dyno Files Error: " + e.message, ui.ButtonSet.OK);
   }
 
   try { 
     retroactiveLogRecalculate(); 
   } catch(e) { 
     Logger.log("Reference Matrix Recalculation Alert: " + e.toString()); 
-    ui.alert("⚠️ Recalculation Warning", "Retroactive Recalculate Error: " + e.message, ui.ButtonSet.OK);
+    if (ui) ui.alert("⚠️ Recalculation Warning", "Retroactive Recalculate Error: " + e.message, ui.ButtonSet.OK);
   }
 
   try {
