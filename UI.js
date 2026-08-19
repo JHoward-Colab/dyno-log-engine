@@ -202,45 +202,65 @@ function manageOperatorStation(e) {
       var registrySheet = ss.getSheetByName(CONFIG.SHEET_NAMES.PROGRAM_REGISTRY);  
       var matchedProgramName = "";
       var matchedDynamicKey = "";
+      var matchedBaseModel = "";
 
       if (registrySheet && woPartNumber) {  
         var regValues = registrySheet.getDataRange().getValues();  
         var cleanWoPart = cleanKey(woPartNumber);  
         var regCols = CONFIG.COLUMNS.PROGRAM_REGISTRY;
         
+        var bestMatchRow = null;
+        var highestMatchScore = 0;
+
         for (var rR = 1; rR < regValues.length; rR++) {  
           var regRow = regValues[rR];
-          var regPartClean = cleanKey(regRow[regCols.BASE_MODEL - 1]);  
           var regProgName = String(regRow[regCols.PROGRAM_NAME - 1] || "").trim();  
           var regDynamicKey = String(regRow[regCols.DYNAMIC_KEY - 1] || "").trim();
-          var regKeyClean = cleanKey(regDynamicKey);
+          var regBaseModel = String(regRow[regCols.BASE_MODEL - 1] || "").trim();
+          
+          var cleanProgName = cleanKey(regProgName);
+          var cleanDynKey = cleanKey(regDynamicKey);
+          var cleanBase = cleanKey(regBaseModel);
 
-          // Flexible Matcher: Handles exact match, substrings, or dynamic keys
-          var isMatch = false;
-          if (regPartClean && cleanWoPart) {
-            if (regPartClean === cleanWoPart || cleanWoPart.indexOf(regPartClean) !== -1 || regPartClean.indexOf(cleanWoPart) !== -1) {
-              isMatch = true;
-            }
+          if (!regProgName && !regDynamicKey && !regBaseModel) continue;
+
+          var currentScore = 0;
+
+          // Priority 1: Exact match on Dynamic Key or Program Name
+          if ((cleanDynKey && cleanDynKey === cleanWoPart) || (cleanProgName && cleanProgName === cleanWoPart)) {
+            currentScore = 3;
           }
-          if (!isMatch && regKeyClean && cleanWoPart) {
-            if (regKeyClean === cleanWoPart || cleanWoPart.indexOf(regKeyClean) !== -1 || regKeyClean.indexOf(cleanWoPart) !== -1) {
-              isMatch = true;
-            }
+          // Priority 2: Partial match on Dynamic Key or Program Name
+          else if ((cleanDynKey && cleanWoPart.indexOf(cleanDynKey) !== -1) || (cleanProgName && cleanWoPart.indexOf(cleanProgName) !== -1)) {
+            currentScore = 2;
+          }
+          // Priority 3: Fallback match on Base Model (later rows override earlier rows)
+          else if (cleanBase && (cleanBase === cleanWoPart || cleanWoPart.indexOf(cleanBase) !== -1 || cleanBase.indexOf(cleanWoPart) !== -1)) {
+            currentScore = 1;
           }
 
-          if (isMatch && regProgName) {  
-            matchedProgramName = regProgName;
-            matchedDynamicKey = regDynamicKey;
-            
-            sheet.getRange(ranges.CUSTOMER_ACCOUNT_OUTPUT).setValue(regRow[regCols.CUSTOMER_ACCOUNT - 1] || "");
-            sheet.getRange(ranges.VEHICLE_SPEC_OUTPUT).setValue(regRow[regCols.VEHICLE_SPEC - 1] || "");
-            sheet.getRange(ranges.PROGRAM_NAME_OUTPUT).setValue(regProgName);
-            sheet.getRange(ranges.VALVING_VERSION_OUTPUT).setValue(regRow[regCols.VALVING_VERSION - 1] || "");
-            sheet.getRange(ranges.ADJUSTER_TARGETS_OUTPUT).setValue(regRow[regCols.ADJUSTER_SETTINGS - 1] || "");
-            
-            sheet.getRange(ranges.CROSS_CHECK_OUTPUT).setValue("Validated in Registry");
-            break;
-          }  
+          if (currentScore > 0 && currentScore >= highestMatchScore) {
+            highestMatchScore = currentScore;
+            bestMatchRow = regRow;
+          }
+        }
+
+        if (bestMatchRow) {
+          matchedProgramName = String(bestMatchRow[regCols.PROGRAM_NAME - 1] || "").trim();
+          matchedDynamicKey = String(bestMatchRow[regCols.DYNAMIC_KEY - 1] || "").trim();
+          matchedBaseModel = String(bestMatchRow[regCols.BASE_MODEL - 1] || "").trim();
+
+          sheet.getRange(ranges.CUSTOMER_ACCOUNT_OUTPUT).setValue(bestMatchRow[regCols.CUSTOMER_ACCOUNT - 1] || "");
+          sheet.getRange(ranges.VEHICLE_SPEC_OUTPUT).setValue(bestMatchRow[regCols.VEHICLE_SPEC - 1] || "");
+          sheet.getRange(ranges.PROGRAM_NAME_OUTPUT).setValue(matchedProgramName);
+          sheet.getRange(ranges.VALVING_VERSION_OUTPUT).setValue(bestMatchRow[regCols.VALVING_VERSION - 1] || "");
+          sheet.getRange(ranges.ADJUSTER_TARGETS_OUTPUT).setValue(bestMatchRow[regCols.ADJUSTER_SETTINGS - 1] || "");
+          
+          if (matchedBaseModel) {
+            sheet.getRange(ranges.BASE_MODEL_OUTPUT).setValue(matchedBaseModel);
+          }
+
+          sheet.getRange(ranges.CROSS_CHECK_OUTPUT).setValue("Validated in Registry");
         }  
       }  
 
@@ -554,7 +574,6 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber,
   for (var rIdx = 0; rIdx < numRows; rIdx++) {
     var rowBg = ["#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF"];
     var rowFont = ["#000000", "#000000", "#000000", "#000000", "#000000", "#000000", "#000000", "#000000", "#000000", "#000000", "#000000", "#000000"];
-    var rowWeight = ["normal", "normal", "normal", "normal", "normal", "normal", "normal", "normal", "normal", "normal", "normal", "normal"];
     var rowData = rowsToDisplay[rIdx];
 
     var t1StatusStr    = String(rowData[6] || "").toUpperCase();
