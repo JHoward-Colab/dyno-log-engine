@@ -213,8 +213,22 @@ function manageOperatorStation(e) {
           var regPartClean = cleanKey(regRow[regCols.BASE_MODEL - 1]);  
           var regProgName = String(regRow[regCols.PROGRAM_NAME - 1] || "").trim();  
           var regDynamicKey = String(regRow[regCols.DYNAMIC_KEY - 1] || "").trim();
-          
-          if (regPartClean === cleanWoPart && regProgName) {  
+          var regKeyClean = cleanKey(regDynamicKey);
+
+          // Flexible Matcher: Handles exact match, substrings, or dynamic keys
+          var isMatch = false;
+          if (regPartClean && cleanWoPart) {
+            if (regPartClean === cleanWoPart || cleanWoPart.indexOf(regPartClean) !== -1 || regPartClean.indexOf(cleanWoPart) !== -1) {
+              isMatch = true;
+            }
+          }
+          if (!isMatch && regKeyClean && cleanWoPart) {
+            if (regKeyClean === cleanWoPart || cleanWoPart.indexOf(regKeyClean) !== -1 || regKeyClean.indexOf(cleanWoPart) !== -1) {
+              isMatch = true;
+            }
+          }
+
+          if (isMatch && regProgName) {  
             matchedProgramName = regProgName;
             matchedDynamicKey = regDynamicKey;
             
@@ -271,7 +285,7 @@ function getSpecLimitsFromMatrix(ss, dynamicKeyOrPart) {
     if (minVal === "" || maxVal === "" || minVal === null || maxVal === null) return { min: NaN, max: NaN };
     var a = Math.abs(parseFloat(minVal));
     var b = Math.abs(parseFloat(maxVal));
-    if (isNaN(a) || isNaN(b)) return { min: NaN, max: NaN };
+    if (isNaN(a) || isNaN(b)) return { min: Math.min(a, b), max: Math.max(a, b) };
     return { min: Math.min(a, b), max: Math.max(a, b) };
   }
 
