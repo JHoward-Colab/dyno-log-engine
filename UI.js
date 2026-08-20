@@ -574,6 +574,7 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber,
   for (var rIdx = 0; rIdx < numRows; rIdx++) {
     var rowBg = ["#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF"];
     var rowFont = ["#000000", "#000000", "#000000", "#000000", "#000000", "#000000", "#000000", "#000000", "#000000", "#000000", "#000000", "#000000"];
+    var rowWeight = ["normal", "normal", "normal", "normal", "normal", "normal", "normal", "normal", "normal", "normal", "normal", "normal"];
     var rowData = rowsToDisplay[rIdx];
 
     var t1StatusStr    = String(rowData[6] || "").toUpperCase();
@@ -581,49 +582,73 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber,
     var overallStatStr = String(rowData[8] || "").toUpperCase();
     var diagnosticsStr = String(rowData[10] || "");
 
-    var applyFaultHighlight = function(colIndex) {
-      rowFont[colIndex] = "#FF0000";      
-      rowWeight[colIndex] = "bold";       
-      rowBg[colIndex] = "#FADBD8";        
+    // Helper: Test 1 Red Highlight (Blueprint / Spec Limit Fails)
+    var applyRedHighlight = function(colIndex) {
+      rowBg[colIndex] = "#FADBD8";   // Soft Red
+      rowFont[colIndex] = "#C0392B"; // Dark Red
+      rowWeight[colIndex] = "bold";
     };
 
-    if (!diagnosticsStr.includes("✅") && !diagnosticsStr.includes("⏳")) {
-      if (diagnosticsStr.indexOf("[RF_FAIL]") !== -1)    applyFaultHighlight(1);
-      if (diagnosticsStr.indexOf("[C1_FAIL]") !== -1)    applyFaultHighlight(2);
-      if (diagnosticsStr.indexOf("[R1_FAIL]") !== -1)    applyFaultHighlight(3);
-      if (diagnosticsStr.indexOf("[C2_FAIL]") !== -1)    applyFaultHighlight(4);
-      if (diagnosticsStr.indexOf("[R2_FAIL]") !== -1)    applyFaultHighlight(5);
-      if (diagnosticsStr.indexOf("[SLOPE_FAIL]") !== -1) { applyFaultHighlight(2); applyFaultHighlight(3); }
-    }
+    // Helper: Test 2 Yellow Highlight (Outlier / Cohort Fails)
+    var applyYellowHighlight = function(colIndex) {
+      // Red (Test 1) takes precedence if cell is already flagged red
+      if (rowBg[colIndex] !== "#FADBD8") {
+        rowBg[colIndex] = "#FCF3CF";   // Soft Yellow
+        rowFont[colIndex] = "#B9770E"; // Dark Yellow/Gold
+        rowWeight[colIndex] = "bold";
+      }
+    };
 
+    // 1. Direct Numeric Measurement vs Target Range Checks (Test 1 Spec Limits)
     var c1Val = parseFloat(rowData[2]);
     var r1Val = parseFloat(rowData[3]);
     var c2Val = parseFloat(rowData[4]);
     var r2Val = parseFloat(rowData[5]);
 
-    if (!isNaN(c1Val) && ((!isNaN(limits.c1Min) && c1Val < limits.c1Min) || (!isNaN(limits.c1Max) && c1Val > limits.c1Max))) applyFaultHighlight(2);
-    if (!isNaN(r1Val) && ((!isNaN(limits.r1Min) && r1Val < limits.r1Min) || (!isNaN(limits.r1Max) && r1Val > limits.r1Max))) applyFaultHighlight(3);
-    if (!isNaN(c2Val) && ((!isNaN(limits.c2Min) && c2Val < limits.c2Min) || (!isNaN(limits.c2Max) && c2Val > limits.c2Max))) applyFaultHighlight(4);
-    if (!isNaN(r2Val) && ((!isNaN(limits.r2Min) && r2Val < limits.r2Min) || (!isNaN(limits.r2Max) && r2Val > limits.r2Max))) applyFaultHighlight(5);
+    if (!isNaN(c1Val) && ((!isNaN(limits.c1Min) && c1Val < limits.c1Min) || (!isNaN(limits.c1Max) && c1Val > limits.c1Max))) applyRedHighlight(2);
+    if (!isNaN(r1Val) && ((!isNaN(limits.r1Min) && r1Val < limits.r1Min) || (!isNaN(limits.r1Max) && r1Val > limits.r1Max))) applyRedHighlight(3);
+    if (!isNaN(c2Val) && ((!isNaN(limits.c2Min) && c2Val < limits.c2Min) || (!isNaN(limits.c2Max) && c2Val > limits.c2Max))) applyRedHighlight(4);
+    if (!isNaN(r2Val) && ((!isNaN(limits.r2Min) && r2Val < limits.r2Min) || (!isNaN(limits.r2Max) && r2Val > limits.r2Max))) applyRedHighlight(5);
 
+    // 2. Diagnostic Tag Highlighting
+    if (!diagnosticsStr.includes("✅") && !diagnosticsStr.includes("⏳")) {
+      var isT1Fail = t1StatusStr.includes("FAIL");
+      var isT2Fail = t2StatusStr.includes("FAIL");
+      var activeHighlightFunc = isT1Fail ? applyRedHighlight : (isT2Fail ? applyYellowHighlight : applyRedHighlight);
+
+      if (diagnosticsStr.indexOf("[RF_FAIL]") !== -1)    activeHighlightFunc(1);
+      if (diagnosticsStr.indexOf("[C1_FAIL]") !== -1)    activeHighlightFunc(2);
+      if (diagnosticsStr.indexOf("[R1_FAIL]") !== -1)    activeHighlightFunc(3);
+      if (diagnosticsStr.indexOf("[C2_FAIL]") !== -1)    activeHighlightFunc(4);
+      if (diagnosticsStr.indexOf("[R2_FAIL]") !== -1)    activeHighlightFunc(5);
+      if (diagnosticsStr.indexOf("[SLOPE_FAIL]") !== -1) { activeHighlightFunc(2); activeHighlightFunc(3); }
+    }
+
+    // 3. Test 1 Status Column (Col G / Index 6)
     if (t1StatusStr.includes("FAIL")) {
-      rowBg[6] = "#FADBD8"; rowFont[6] = "#C0392B"; rowWeight[6] = "bold";
+      applyRedHighlight(6);
     } else if (t1StatusStr.includes("PASS")) {
       rowBg[6] = "#D4EFDF"; rowFont[6] = "#196F3D";
     } else if (t1StatusStr.includes("NOT TESTED")) {
       rowBg[6] = "#F2F4F4"; rowFont[6] = "#5D6D7E";
     }
 
+    // 4. Test 2 Status Column (Col H / Index 7) - Yellow for Test 2 Outliers
     if (t2StatusStr.includes("FAIL")) {
-      rowBg[7] = "#FADBD8"; rowFont[7] = "#C0392B"; rowWeight[7] = "bold";
+      rowBg[7] = "#FCF3CF"; rowFont[7] = "#B9770E"; rowWeight[7] = "bold";
     } else if (t2StatusStr.includes("PASS")) {
       rowBg[7] = "#D4EFDF"; rowFont[7] = "#196F3D";
     } else if (t2StatusStr.includes("NOT TESTED")) {
       rowBg[7] = "#F2F4F4"; rowFont[7] = "#5D6D7E";
     }
 
+    // 5. Overall Status Column (Col I / Index 8)
     if (overallStatStr.includes("FAIL")) {
-      rowBg[8] = "#C0392B"; rowFont[8] = "#FFFFFF"; rowWeight[8] = "bold";
+      if (t1StatusStr.includes("FAIL")) {
+        rowBg[8] = "#C0392B"; rowFont[8] = "#FFFFFF"; rowWeight[8] = "bold"; // Solid Red
+      } else {
+        rowBg[8] = "#FCF3CF"; rowFont[8] = "#B9770E"; rowWeight[8] = "bold"; // Soft Yellow
+      }
     } else if (overallStatStr.includes("HOLD") || overallStatStr.includes("NOT TESTED")) {
       rowBg[8] = "#FCF3CF"; rowFont[8] = "#B7950B"; rowWeight[8] = "bold";
     } else if (overallStatStr.includes("OVERRIDE") || overallStatStr.includes("PASS")) {
