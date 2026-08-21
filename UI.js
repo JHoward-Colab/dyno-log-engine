@@ -591,7 +591,6 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber,
 
     // Helper: Test 2 Yellow Highlight (Outlier / Cohort Fails)
     var applyYellowHighlight = function(colIndex) {
-      // Red (Test 1) takes precedence if cell is already flagged red
       if (rowBg[colIndex] !== "#FADBD8") {
         rowBg[colIndex] = "#FCF3CF";   // Soft Yellow
         rowFont[colIndex] = "#B9770E"; // Dark Yellow/Gold
@@ -678,6 +677,16 @@ function installableOnEdit(e) {
 
   var sheet = e.range.getSheet();
   var sheetName = sheet.getName();
+
+  if (sheetName === (CONFIG.SHEET_NAMES.SERIAL_HISTORY_VIEWER || "Serial_History_Viewer")) {
+    var searchCell = (CONFIG.SERIAL_HISTORY_VIEWER && CONFIG.SERIAL_HISTORY_VIEWER.RANGES) ? CONFIG.SERIAL_HISTORY_VIEWER.RANGES.SERIAL_SEARCH_INPUT : "B2";
+    if (e.range.getA1Notation() === searchCell) {
+      if (typeof renderSerialHistory === "function") {
+        renderSerialHistory(e);
+      }
+    }
+    return;
+  }
 
   if (sheetName === CONFIG.SHEET_NAMES.OPERATOR_STATION) {
     try { manageOperatorStation(e); } catch(err) { Logger.log("Operator station edit error: " + err.toString()); }

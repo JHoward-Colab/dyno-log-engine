@@ -8,6 +8,7 @@ const CONFIG = Object.freeze({
     PART_REFERENCE_MATRIX: "Part_Reference_Matrix",
     OPERATOR_STATION: "Operator_Station",
     PROGRAM_REGISTRY: "Program_Registry",
+    SERIAL_HISTORY_VIEWER: "Serial_History_Viewer",
     SUMMARY: "Summary"
   }),
 
@@ -146,6 +147,18 @@ const CONFIG = Object.freeze({
       RESULTS_START_ROW: 27,
       RESULTS_START_COL: 1,
       RESULTS_COL_COUNT: 12
+    })
+  }),
+
+  SERIAL_HISTORY_VIEWER: Object.freeze({
+    RANGES: Object.freeze({
+      SERIAL_SEARCH_INPUT: "B2",
+      TOTAL_RUNS: "B5",
+      BASE_MODEL: "C5",
+      LATEST_STATUS: "D5",
+      LAST_TEST_DATE: "E5",
+      RESULTS_START_ROW: 9,
+      CLEAR_RESULTS_RANGE: "A9:P1000"
     })
   }),
 
