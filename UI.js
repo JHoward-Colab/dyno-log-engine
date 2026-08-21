@@ -226,16 +226,11 @@ function manageOperatorStation(e) {
 
           var currentScore = 0;
 
-          // Priority 1: Exact match on Dynamic Key or Program Name
           if ((cleanDynKey && cleanDynKey === cleanWoPart) || (cleanProgName && cleanProgName === cleanWoPart)) {
             currentScore = 3;
-          }
-          // Priority 2: Partial match on Dynamic Key or Program Name
-          else if ((cleanDynKey && cleanWoPart.indexOf(cleanDynKey) !== -1) || (cleanProgName && cleanWoPart.indexOf(cleanProgName) !== -1)) {
+          } else if ((cleanDynKey && cleanWoPart.indexOf(cleanDynKey) !== -1) || (cleanProgName && cleanWoPart.indexOf(cleanProgName) !== -1)) {
             currentScore = 2;
-          }
-          // Priority 3: Fallback match on Base Model (later rows override earlier rows)
-          else if (cleanBase && (cleanBase === cleanWoPart || cleanWoPart.indexOf(cleanBase) !== -1 || cleanBase.indexOf(cleanWoPart) !== -1)) {
+          } else if (cleanBase && (cleanBase === cleanWoPart || cleanWoPart.indexOf(cleanBase) !== -1 || cleanBase.indexOf(cleanWoPart) !== -1)) {
             currentScore = 1;
           }
 
@@ -453,12 +448,10 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber,
     }
   }
 
-  // Pre-format short display serial for each item prior to sorting
   for (var i = 0; i < itemsToProcess.length; i++) {
     itemsToProcess[i].displaySerial = formatShortSerial(itemsToProcess[i].rawSerial, searchBarcode);
   }
 
-  // Natural numeric sort on standardized displaySerial (e.g. 001979-001, 001979-002, 001979-010)
   itemsToProcess.sort(function(a, b) {
     var sA = a.displaySerial || "";
     var sB = b.displaySerial || "";
@@ -574,7 +567,6 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber,
   for (var rIdx = 0; rIdx < numRows; rIdx++) {
     var rowBg = ["#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF"];
     var rowFont = ["#000000", "#000000", "#000000", "#000000", "#000000", "#000000", "#000000", "#000000", "#000000", "#000000", "#000000", "#000000"];
-    var rowWeight = ["normal", "normal", "normal", "normal", "normal", "normal", "normal", "normal", "normal", "normal", "normal", "normal"];
     var rowData = rowsToDisplay[rIdx];
 
     var t1StatusStr    = String(rowData[6] || "").toUpperCase();
@@ -582,23 +574,20 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber,
     var overallStatStr = String(rowData[8] || "").toUpperCase();
     var diagnosticsStr = String(rowData[10] || "");
 
-    // Helper: Test 1 Red Highlight (Blueprint / Spec Limit Fails)
     var applyRedHighlight = function(colIndex) {
-      rowBg[colIndex] = "#FADBD8";   // Soft Red
-      rowFont[colIndex] = "#C0392B"; // Dark Red
+      rowBg[colIndex] = "#FADBD8";   
+      rowFont[colIndex] = "#C0392B"; 
       rowWeight[colIndex] = "bold";
     };
 
-    // Helper: Test 2 Yellow Highlight (Outlier / Cohort Fails)
     var applyYellowHighlight = function(colIndex) {
       if (rowBg[colIndex] !== "#FADBD8") {
-        rowBg[colIndex] = "#FCF3CF";   // Soft Yellow
-        rowFont[colIndex] = "#B9770E"; // Dark Yellow/Gold
+        rowBg[colIndex] = "#FCF3CF";   
+        rowFont[colIndex] = "#B9770E"; 
         rowWeight[colIndex] = "bold";
       }
     };
 
-    // 1. Direct Numeric Measurement vs Target Range Checks (Test 1 Spec Limits)
     var c1Val = parseFloat(rowData[2]);
     var r1Val = parseFloat(rowData[3]);
     var c2Val = parseFloat(rowData[4]);
@@ -609,7 +598,6 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber,
     if (!isNaN(c2Val) && ((!isNaN(limits.c2Min) && c2Val < limits.c2Min) || (!isNaN(limits.c2Max) && c2Val > limits.c2Max))) applyRedHighlight(4);
     if (!isNaN(r2Val) && ((!isNaN(limits.r2Min) && r2Val < limits.r2Min) || (!isNaN(limits.r2Max) && r2Val > limits.r2Max))) applyRedHighlight(5);
 
-    // 2. Diagnostic Tag Highlighting
     if (!diagnosticsStr.includes("✅") && !diagnosticsStr.includes("⏳")) {
       var isT1Fail = t1StatusStr.includes("FAIL");
       var isT2Fail = t2StatusStr.includes("FAIL");
@@ -623,7 +611,6 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber,
       if (diagnosticsStr.indexOf("[SLOPE_FAIL]") !== -1) { activeHighlightFunc(2); activeHighlightFunc(3); }
     }
 
-    // 3. Test 1 Status Column (Col G / Index 6)
     if (t1StatusStr.includes("FAIL")) {
       applyRedHighlight(6);
     } else if (t1StatusStr.includes("PASS")) {
@@ -632,7 +619,6 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber,
       rowBg[6] = "#F2F4F4"; rowFont[6] = "#5D6D7E";
     }
 
-    // 4. Test 2 Status Column (Col H / Index 7) - Yellow for Test 2 Outliers
     if (t2StatusStr.includes("FAIL")) {
       rowBg[7] = "#FCF3CF"; rowFont[7] = "#B9770E"; rowWeight[7] = "bold";
     } else if (t2StatusStr.includes("PASS")) {
@@ -641,12 +627,11 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber,
       rowBg[7] = "#F2F4F4"; rowFont[7] = "#5D6D7E";
     }
 
-    // 5. Overall Status Column (Col I / Index 8)
     if (overallStatStr.includes("FAIL")) {
       if (t1StatusStr.includes("FAIL")) {
-        rowBg[8] = "#C0392B"; rowFont[8] = "#FFFFFF"; rowWeight[8] = "bold"; // Solid Red
+        rowBg[8] = "#C0392B"; rowFont[8] = "#FFFFFF"; rowWeight[8] = "bold"; 
       } else {
-        rowBg[8] = "#FCF3CF"; rowFont[8] = "#B9770E"; rowWeight[8] = "bold"; // Soft Yellow
+        rowBg[8] = "#FCF3CF"; rowFont[8] = "#B9770E"; rowWeight[8] = "bold"; 
       }
     } else if (overallStatStr.includes("HOLD") || overallStatStr.includes("NOT TESTED")) {
       rowBg[8] = "#FCF3CF"; rowFont[8] = "#B7950B"; rowWeight[8] = "bold";
@@ -677,12 +662,19 @@ function installableOnEdit(e) {
 
   var sheet = e.range.getSheet();
   var sheetName = sheet.getName();
+  var cleanSheetName = cleanKey(sheetName);
 
-  if (sheetName === (CONFIG.SHEET_NAMES.SERIAL_HISTORY_VIEWER || "Serial_History_Viewer")) {
-    var searchCell = (CONFIG.SERIAL_HISTORY_VIEWER && CONFIG.SERIAL_HISTORY_VIEWER.RANGES) ? CONFIG.SERIAL_HISTORY_VIEWER.RANGES.SERIAL_SEARCH_INPUT : "B2";
-    if (e.range.getA1Notation() === searchCell) {
+  // Case-Insensitive Router for Serial History Viewer tab
+  if (cleanSheetName === "serialhistoryviewer" || cleanSheetName === "history") {
+    var searchCell = (CONFIG.SERIAL_HISTORY_VIEWER && CONFIG.SERIAL_HISTORY_VIEWER.RANGES) 
+      ? CONFIG.SERIAL_HISTORY_VIEWER.RANGES.SERIAL_SEARCH_INPUT 
+      : "B2";
+      
+    if (e.range.getA1Notation().toUpperCase() === searchCell.toUpperCase()) {
       if (typeof renderSerialHistory === "function") {
         renderSerialHistory(e);
+      } else {
+        Logger.log("Error: renderSerialHistory function is missing or not deployed.");
       }
     }
     return;

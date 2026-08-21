@@ -5,17 +5,30 @@
 function renderSerialHistory(e) {
   try {
     var ss = e ? e.source : SpreadsheetApp.getActiveSpreadsheet();
-    var tabName = (CONFIG.SHEET_NAMES && CONFIG.SHEET_NAMES.SERIAL_HISTORY_VIEWER) ? CONFIG.SHEET_NAMES.SERIAL_HISTORY_VIEWER : "SERIAL_HISTORY_VIEWER";
+    
+    var tabName = (CONFIG.SHEET_NAMES && CONFIG.SHEET_NAMES.SERIAL_HISTORY_VIEWER) 
+      ? CONFIG.SHEET_NAMES.SERIAL_HISTORY_VIEWER 
+      : "Serial_History_Viewer";
+      
     var historySheet = ss.getSheetByName(tabName);
     var logSheet = ss.getSheetByName(CONFIG.SHEET_NAMES.MASTER_DYNO_LOG);
 
-    if (!historySheet || !logSheet) return;
+    if (!historySheet || !logSheet) {
+      Logger.log("renderSerialHistory Error: Missing History or Master_Dyno_Log sheet.");
+      return;
+    }
 
-    var searchCell = (CONFIG.SERIAL_HISTORY_VIEWER && CONFIG.SERIAL_HISTORY_VIEWER.RANGES) ? CONFIG.SERIAL_HISTORY_VIEWER.RANGES.SERIAL_SEARCH_INPUT : "B2";
+    var searchCell = (CONFIG.SERIAL_HISTORY_VIEWER && CONFIG.SERIAL_HISTORY_VIEWER.RANGES) 
+      ? CONFIG.SERIAL_HISTORY_VIEWER.RANGES.SERIAL_SEARCH_INPUT 
+      : "B2";
+      
     var targetSerial = String(historySheet.getRange(searchCell).getValue()).trim();
 
     // Clear previous output & summary
-    var clearRange = (CONFIG.SERIAL_HISTORY_VIEWER && CONFIG.SERIAL_HISTORY_VIEWER.RANGES) ? CONFIG.SERIAL_HISTORY_VIEWER.RANGES.CLEAR_RESULTS_RANGE : "A9:P1000";
+    var clearRange = (CONFIG.SERIAL_HISTORY_VIEWER && CONFIG.SERIAL_HISTORY_VIEWER.RANGES) 
+      ? CONFIG.SERIAL_HISTORY_VIEWER.RANGES.CLEAR_RESULTS_RANGE 
+      : "A9:P1000";
+      
     historySheet.getRange(clearRange).clearContent().setBackground(null).setFontWeight("normal");
     historySheet.getRange("B5:E5").clearContent();
 
@@ -76,7 +89,9 @@ function renderSerialHistory(e) {
 
     // Render KPI Summary
     var latestRun = matchingRows[0];
-    var latestDateStr = latestRun[0] instanceof Date ? Utilities.formatDate(latestRun[0], Session.getScriptTimeZone(), "yyyy-MM-dd HH:mm") : String(latestRun[0]);
+    var latestDateStr = latestRun[0] instanceof Date 
+      ? Utilities.formatDate(latestRun[0], Session.getScriptTimeZone(), "yyyy-MM-dd HH:mm") 
+      : String(latestRun[0]);
 
     historySheet.getRange(CONFIG.SERIAL_HISTORY_VIEWER.RANGES.TOTAL_RUNS).setValue(totalRuns + (totalRuns > 1 ? " Runs (Retested)" : " Run"));
     historySheet.getRange(CONFIG.SERIAL_HISTORY_VIEWER.RANGES.BASE_MODEL).setValue(detectedBaseModel || "N/A");
