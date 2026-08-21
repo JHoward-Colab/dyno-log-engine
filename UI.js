@@ -565,9 +565,10 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber,
   var fontWeights = [];
 
   for (var rIdx = 0; rIdx < numRows; rIdx++) {
-    var rowBg = ["#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF"];
-    var rowFont = ["#000000", "#000000", "#000000", "#000000", "#000000", "#000000", "#000000", "#000000", "#000000", "#000000", "#000000", "#000000"];
-    var rowData = rowsToDisplay[rIdx];
+    var rowBg     = ["#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF"];
+    var rowFont   = ["#000000", "#000000", "#000000", "#000000", "#000000", "#000000", "#000000", "#000000", "#000000", "#000000", "#000000", "#000000"];
+    var rowWeight = ["normal", "normal", "normal", "normal", "normal", "normal", "normal", "normal", "normal", "normal", "normal", "normal"];
+    var rowData   = rowsToDisplay[rIdx];
 
     var t1StatusStr    = String(rowData[6] || "").toUpperCase();
     var t2StatusStr    = String(rowData[7] || "").toUpperCase();
