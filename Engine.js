@@ -533,15 +533,15 @@ function retroactiveLogRecalculate() {
       if (mMap.r2SD !== undefined) refSheet.getRange(refRowIdx, mMap.r2SD + 1).setValue(parseFloat(r2S.toFixed(2)));
       
       if (countN > 2) {
-        // Enforce 80% Mean Floor Guardrail (prevents minimum limits from dropping to zero)
-        var c1MinCalc = Math.max(parseFloat((c1M * 0.80).toFixed(1)), parseFloat((c1M - 3*c1S).toFixed(1)));
+        // Enforce 68% Mean Floor Guardrail (allows ~6.0 force readings to pass while blocking sub-5.8 drops)
+        var c1MinCalc = Math.max(parseFloat((c1M * 0.68).toFixed(1)), parseFloat((c1M - 3*c1S).toFixed(1)));
         var c1MaxCalc = parseFloat((c1M + 3*c1S).toFixed(1));
-        var r1MinCalc = Math.max(parseFloat((r1M * 0.80).toFixed(1)), parseFloat((r1M - 3*r1S).toFixed(1)));
+        var r1MinCalc = Math.max(parseFloat((r1M * 0.68).toFixed(1)), parseFloat((r1M - 3*r1S).toFixed(1)));
         var r1MaxCalc = parseFloat((r1M + 3*r1S).toFixed(1));
 
-        var c2MinCalc = Math.max(parseFloat((c2M * 0.80).toFixed(1)), parseFloat((c2M - 3*c2S).toFixed(1)));
+        var c2MinCalc = Math.max(parseFloat((c2M * 0.68).toFixed(1)), parseFloat((c2M - 3*c2S).toFixed(1)));
         var c2MaxCalc = parseFloat((c2M + 3*c2S).toFixed(1));
-        var r2MinCalc = Math.max(parseFloat((r2M * 0.80).toFixed(1)), parseFloat((r2M - 3*r2S).toFixed(1)));
+        var r2MinCalc = Math.max(parseFloat((r2M * 0.68).toFixed(1)), parseFloat((r2M - 3*r2S).toFixed(1)));
         var r2MaxCalc = parseFloat((r2M + 3*r2S).toFixed(1));
 
         if (mMap.c1Min !== undefined) refSheet.getRange(refRowIdx, mMap.c1Min + 1).setValue(c1MinCalc);
