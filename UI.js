@@ -244,15 +244,23 @@ function manageOperatorStation(e) {
 
           var currentScore = 0;
 
-          if ((cleanDynKey && cleanDynKey === cleanWoPart) || (cleanProgName && cleanProgName === cleanWoPart)) {
-            currentScore = 3;
-          } else if ((cleanDynKey && cleanWoPart.indexOf(cleanDynKey) !== -1) || (cleanProgName && cleanWoPart.indexOf(cleanProgName) !== -1)) {
-            currentScore = 2;
-          } else if (cleanBase && (cleanBase === cleanWoPart || cleanWoPart.indexOf(cleanBase) !== -1 || cleanBase.indexOf(cleanWoPart) !== -1)) {
-            currentScore = 1;
+          // STRICT MATCH HIERARCHY
+          if (cleanBase && cleanBase === cleanWoPart) {
+            currentScore = 10; // Highest Priority: Exact match on Base Model
+          } else if (cleanDynKey && cleanDynKey === cleanWoPart) {
+            currentScore = 9;  // Exact match on Dynamic Key
+          } else if (cleanProgName && cleanProgName === cleanWoPart) {
+            currentScore = 8;  // Exact match on Program Name
+          } else if (cleanDynKey && cleanWoPart.indexOf(cleanDynKey) !== -1) {
+            currentScore = 5;  // Partial match on Dynamic Key
+          } else if (cleanProgName && cleanWoPart.indexOf(cleanProgName) !== -1) {
+            currentScore = 4;  // Partial match on Program Name
+          } else if (cleanBase && cleanWoPart.indexOf(cleanBase) !== -1) {
+            currentScore = 3;  // Partial match on Base Model (e.g. WO contains Base)
           }
 
-          if (currentScore > 0 && currentScore >= highestMatchScore) {
+          // Strict > keeps the best/first exact match from being overwritten
+          if (currentScore > 0 && currentScore > highestMatchScore) {
             highestMatchScore = currentScore;
             bestMatchRow = regRow;
           }
