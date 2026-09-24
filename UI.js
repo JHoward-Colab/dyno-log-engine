@@ -179,8 +179,8 @@ function manageOperatorStation(e) {
     sheet.getRange(ranges.CACHED_FILE_ID).setValue(verifiedFileIdStr);  
       
     try {  
-      var woSpreadsheet = SpreadsheetApp.openById(verifiedFileIdStr); 
-      var woSheet = woSpreadsheet.getSheets()[0];   
+      var woSpreadsheet = SpreadsheetApp.openById(verifiedFileIdStr);
+      var woSheet = woSpreadsheet.getSheetByName("WO") || woSpreadsheet.getSheets()[0];   
       var woPartNumber = String(woSheet.getRange("D3").getValue()).trim(); 
       var woBomRevision = String(woSheet.getRange("D4").getValue()).trim();   
       
