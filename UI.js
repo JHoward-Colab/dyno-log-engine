@@ -163,7 +163,20 @@ function manageOperatorStation(e) {
     if (!isNaN(searchBarcode) && searchBarcode.length === 4) { searchBarcode = "00" + searchBarcode; }  
       
     var searchCriteria = "title contains '" + searchBarcode + "' and (mimeType = 'application/vnd.google-apps.spreadsheet' or mimeType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet') and trashed = false";  
-    var files = DriveApp.searchFiles(searchCriteria);  
+    
+    // Scoped search inside Work Order folder first
+    var folder = null;
+    try {
+      if (CONFIG.FOLDERS && CONFIG.FOLDERS.WORK_ORDER_FOLDER_ID) {
+        folder = DriveApp.getFolderById(CONFIG.FOLDERS.WORK_ORDER_FOLDER_ID);
+      }
+    } catch(err) {}
+
+    var files = folder ? folder.searchFiles(searchCriteria) : DriveApp.searchFiles(searchCriteria);  
+    if (!files.hasNext() && folder) {
+      files = DriveApp.searchFiles(searchCriteria);
+    }
+
     if (!files.hasNext()) { 
       sheet.getRange(ranges.FILE_LINK_OUTPUT).setValue("❌ Work Order File Not Found: " + searchBarcode); 
       sheet.getRange(ranges.CROSS_CHECK_OUTPUT).setValue("CROSS-CHECK FAILED");
@@ -180,7 +193,12 @@ function manageOperatorStation(e) {
       
     try {  
       var woSpreadsheet = SpreadsheetApp.openById(verifiedFileIdStr);
-      var woSheet = woSpreadsheet.getSheetByName("WO") || woSpreadsheet.getSheets()[0];   
+      var allSheets = woSpreadsheet.getSheets();
+      var woSheet = allSheets.find(function(s) {
+        var name = s.getName().trim().toUpperCase();
+        return name === "WO" || name === "WORK ORDER" || name.startsWith("WO-");
+      }) || allSheets[0];
+      
       var woPartNumber = String(woSheet.getRange("D3").getValue()).trim(); 
       var woBomRevision = String(woSheet.getRange("D4").getValue()).trim();   
       
