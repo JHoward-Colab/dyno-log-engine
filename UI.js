@@ -78,7 +78,15 @@ function formatShortSerial(rawSerial, searchBarcode) {
 /**
  * Robust Serial Matcher between Work Order barcodes (e.g. 43081008001979001) and Dyno Log serials (e.g. 001979-001).
  */
-function isSerialMatch(expSerial, logSerial) {
+function isSerialMatch(expSerial, logSerial, searchBarcode) {
+  if (!expSerial || !logSerial) return false;
+
+  // 1. Primary Match: Compare standardized short serials (e.g. "002435-001" === "002435-001")
+  var sExp = formatShortSerial(expSerial, searchBarcode);
+  var sLog = formatShortSerial(logSerial, searchBarcode);
+  if (sExp && sLog && sExp.toLowerCase() === sLog.toLowerCase()) return true;
+
+  // 2. Fallback: Clean key exact / end match
   var cExp = cleanKey(expSerial);
   var cLog = cleanKey(logSerial);
   if (!cExp || !cLog) return false;
@@ -90,13 +98,11 @@ function isSerialMatch(expSerial, logSerial) {
   var cExpNoZero = cExp.replace(/^0+/, "");
   if (cExp.endsWith(cLogNoZero) || cLog.endsWith(cExpNoZero)) return true;
 
-  if (cExp.length >= 6 && cLog.length >= 3) {
+  // 3. Fallback: Unit number match (last 3 digits)
+  if (cExp.length >= 3 && cLog.length >= 3) {
     var expUnit = cExp.slice(-3);
     var logUnit = cLog.slice(-3);
-    if (expUnit === logUnit) {
-      var logBatch = cLog.slice(0, -3).replace(/^0+/, "");
-      if (logBatch && cExp.indexOf(logBatch) !== -1) return true;
-    }
+    if (expUnit === logUnit) return true;
   }
 
   return false;
@@ -436,7 +442,7 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber,
       for (var lIdx = 0; lIdx < logSerialKeys.length; lIdx++) {
         var logKey = logSerialKeys[lIdx];
         var logItem = latestLogBySerial[logKey];
-        if (isSerialMatch(expSerial, logItem.trueSerial)) {
+        if (isSerialMatch(expSerial, logItem.trueSerial, searchBarcode)) {
           matchedLogItem = logItem;
           matchedLogKeys[logKey] = true;
           break;
