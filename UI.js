@@ -250,7 +250,7 @@ function manageOperatorStation(e) {
 
           var currentScore = 0;
 
-          // STRICT MATCH HIERARCHY
+         // STRICT MATCH HIERARCHY
           if (cleanBase && cleanBase === cleanWoPart) {
             currentScore = 10; // Highest Priority: Exact match on Base Model
           } else if (cleanDynKey && cleanDynKey === cleanWoPart) {
@@ -265,7 +265,13 @@ function manageOperatorStation(e) {
             currentScore = 3;  // Partial match on Base Model (e.g. WO contains Base)
           }
 
-          // Strict > keeps the best/first exact match from being overwritten
+          // BOM REVISION TIE-BREAKER
+          var regBomRev = String(regRow[regCols.BOM_REV - 1] || "").trim();
+          if (currentScore > 0 && regBomRev && cleanKey(regBomRev) === cleanKey(woBomRevision)) {
+            currentScore += 5; // Boosts score (e.g., 10 -> 15) for matching BOM Rev
+          }
+
+          // Strict > keeps the best exact match from being overwritten unless higher score
           if (currentScore > 0 && currentScore > highestMatchScore) {
             highestMatchScore = currentScore;
             bestMatchRow = regRow;
