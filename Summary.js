@@ -98,9 +98,12 @@ function resetAndReindexAll() {
   runFullSystemIndexer();
 }
 
-function runFullSystemIndexer() {
+/**
+ * Bounds execution time so it never hangs the UI during sync button press.
+ */
+function runFullSystemIndexer(timeLimitMs) {
   var startTime = new Date().getTime();
-  var MAX_EXECUTION_TIME = 240000;
+  var MAX_EXECUTION_TIME = (timeLimitMs && !isNaN(timeLimitMs)) ? timeLimitMs : 240000;
   
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var validModels = getValidRegistryModels(ss);

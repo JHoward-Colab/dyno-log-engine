@@ -71,6 +71,7 @@ function buildHeaderMap(headerRow) {
   for (var i = 0; i < headerRow.length; i++) {
     var cleanH = String(headerRow[i] || "").toLowerCase().replace(/[^a-z0-9]/g, "");
     if (cleanH.indexOf("diagnostic") !== -1) continue;
+
     if (cleanH.indexOf("evaluation") !== -1 || cleanH === "action" || cleanH.indexOf("evalaction") !== -1) {
       map.evaluationAction = i;
     } else if (cleanH.indexOf("engcomment") !== -1 || cleanH.indexOf("engineeringcomment") !== -1 || (cleanH.indexOf("comment") !== -1 && cleanH.indexOf("diagnostic") === -1)) {
@@ -421,7 +422,7 @@ function retroactiveLogRecalculate() {
   if (logData.length < 2) return;
   var hMap = buildHeaderMap(logData[0]);
 
-  // Ensure sheet grid has at least 42 columns to prevent setValues dimensional abort
+  // Ensure sheet grid has exactly 42 columns to prevent setValues dimensional abort
   var TARGET_COLS = 42;
   if (refSheet.getMaxColumns() < TARGET_COLS) {
     refSheet.insertColumnsAfter(refSheet.getMaxColumns(), TARGET_COLS - refSheet.getMaxColumns());
@@ -433,7 +434,7 @@ function retroactiveLogRecalculate() {
   // Normalize all existing rows to uniform 42-width array
   var refData = [];
   for (var i = 0; i < rawRefData.length; i++) {
-    var r = rawRefData[i].slice();
+    var r = rawRefData[i].slice(0, TARGET_COLS); // Force strict width
     while (r.length < TARGET_COLS) r.push("");
     refData.push(r);
   }
@@ -534,16 +535,18 @@ function retroactiveLogRecalculate() {
     var s1Vals = [], s2Vals = [], s3Vals = [];
     var sl1Vals = [], la1Vals = [], sl2Vals = [];
 
+    // FIXED: Safely parsing numbers. If a cell was blank, it previously pushed a '0' and destroyed the SPC average.
     for (var s = 0; s < trainingPool.length; s++) {
       var d = trainingPool[s];
-      c1Vals.push(parseFloat(d[hMap.comp1]) || 0); 
-      r1Vals.push(Math.abs(parseFloat(d[hMap.reb1])) || 0);
-      c2Vals.push(parseFloat(d[hMap.comp2]) || 0); 
-      r2Vals.push(Math.abs(parseFloat(d[hMap.reb2])) || 0);
+      
+      var vC1 = parseFloat(d[hMap.comp1]); if (!isNaN(vC1) && vC1 > 0) c1Vals.push(vC1);
+      var vR1 = Math.abs(parseFloat(d[hMap.reb1])); if (!isNaN(vR1) && vR1 > 0) r1Vals.push(vR1);
+      var vC2 = parseFloat(d[hMap.comp2]); if (!isNaN(vC2) && vC2 > 0) c2Vals.push(vC2);
+      var vR2 = Math.abs(parseFloat(d[hMap.reb2])); if (!isNaN(vR2) && vR2 > 0) r2Vals.push(vR2);
 
-      if (!isNaN(parseFloat(d[hMap.slope1]))) sl1Vals.push(parseFloat(d[hMap.slope1]));
-      if (!isNaN(parseFloat(d[hMap.loopArea1]))) la1Vals.push(parseFloat(d[hMap.loopArea1]));
-      if (!isNaN(parseFloat(d[hMap.slope2]))) sl2Vals.push(parseFloat(d[hMap.slope2]));
+      var sl1 = parseFloat(d[hMap.slope1]); if (!isNaN(sl1)) sl1Vals.push(sl1);
+      var la1 = parseFloat(d[hMap.loopArea1]); if (!isNaN(la1)) la1Vals.push(la1);
+      var sl2 = parseFloat(d[hMap.slope2]); if (!isNaN(sl2)) sl2Vals.push(sl2);
 
       var sp1 = snapToNominalSpeed(d[hMap.speed1]); 
       var sp2 = snapToNominalSpeed(d[hMap.speed2]); 
@@ -575,16 +578,16 @@ function retroactiveLogRecalculate() {
     var c2M = mean(c2Vals), c2S = sd(c2Vals, c2M); 
     var r2M = mean(r2Vals), r2S = sd(r2Vals, r2M);
 
-    // Staged Tolerance Tightening
+    // Staged Tolerance Tightening (Widened for realistic mechanical variance)
     var stageNum = 1; 
-    var sigmaMult = 3.0; 
-    var pctCap = 0.15;
+    var sigmaMult = 3.5; 
+    var pctCap = 0.25;
     if (countN >= 100) { 
-      stageNum = 4; sigmaMult = 2.0; pctCap = 0.08; 
+      stageNum = 4; sigmaMult = 2.5; pctCap = 0.15; 
     } else if (countN >= 40) { 
-      stageNum = 3; sigmaMult = 2.2; pctCap = 0.10; 
+      stageNum = 3; sigmaMult = 2.8; pctCap = 0.18; 
     } else if (countN >= 15) { 
-      stageNum = 2; sigmaMult = 2.5; pctCap = 0.12; 
+      stageNum = 2; sigmaMult = 3.0; pctCap = 0.20; 
     }
 
     function calcAdaptiveLimits(meanVal, sdVal) {
@@ -597,24 +600,26 @@ function retroactiveLogRecalculate() {
     var isManuallyLocked = ctrlModeRaw.includes("LOCK") || ctrlModeRaw.includes("MANUAL");
 
     if (!isManuallyLocked && trainingPool.length >= 3) {
-      setRefVal(mx, 'c1Mean', parseFloat(c1M.toFixed(1))); 
-      setRefVal(mx, 'c1SD', parseFloat(c1S.toFixed(2)));
-      setRefVal(mx, 'r1Mean', parseFloat(r1M.toFixed(1))); 
-      setRefVal(mx, 'r1SD', parseFloat(r1S.toFixed(2)));
-      setRefVal(mx, 'c2Mean', parseFloat(c2M.toFixed(1))); 
-      setRefVal(mx, 'c2SD', parseFloat(c2S.toFixed(2)));
-      setRefVal(mx, 'r2Mean', parseFloat(r2M.toFixed(1))); 
-      setRefVal(mx, 'r2SD', parseFloat(r2S.toFixed(2)));
-
-      var lC1 = calcAdaptiveLimits(c1M, c1S); 
-      var lR1 = calcAdaptiveLimits(r1M, r1S);
-      var lC2 = calcAdaptiveLimits(c2M, c2S); 
-      var lR2 = calcAdaptiveLimits(r2M, r2S);
-
-      setRefVal(mx, 'c1Min', lC1.min); setRefVal(mx, 'c1Max', lC1.max);
-      setRefVal(mx, 'r1Min', lR1.min); setRefVal(mx, 'r1Max', lR1.max);
-      setRefVal(mx, 'c2Min', lC2.min); setRefVal(mx, 'c2Max', lC2.max);
-      setRefVal(mx, 'r2Min', lR2.min); setRefVal(mx, 'r2Max', lR2.max);
+      if (c1M > 0) {
+        setRefVal(mx, 'c1Mean', parseFloat(c1M.toFixed(1))); setRefVal(mx, 'c1SD', parseFloat(c1S.toFixed(2)));
+        var lC1 = calcAdaptiveLimits(c1M, c1S);
+        setRefVal(mx, 'c1Min', lC1.min); setRefVal(mx, 'c1Max', lC1.max);
+      }
+      if (r1M > 0) {
+        setRefVal(mx, 'r1Mean', parseFloat(r1M.toFixed(1))); setRefVal(mx, 'r1SD', parseFloat(r1S.toFixed(2)));
+        var lR1 = calcAdaptiveLimits(r1M, r1S);
+        setRefVal(mx, 'r1Min', lR1.min); setRefVal(mx, 'r1Max', lR1.max);
+      }
+      if (c2M > 0) {
+        setRefVal(mx, 'c2Mean', parseFloat(c2M.toFixed(1))); setRefVal(mx, 'c2SD', parseFloat(c2S.toFixed(2)));
+        var lC2 = calcAdaptiveLimits(c2M, c2S);
+        setRefVal(mx, 'c2Min', lC2.min); setRefVal(mx, 'c2Max', lC2.max);
+      }
+      if (r2M > 0) {
+        setRefVal(mx, 'r2Mean', parseFloat(r2M.toFixed(1))); setRefVal(mx, 'r2SD', parseFloat(r2S.toFixed(2)));
+        var lR2 = calcAdaptiveLimits(r2M, r2S);
+        setRefVal(mx, 'r2Min', lR2.min); setRefVal(mx, 'r2Max', lR2.max);
+      }
     }
 
     if (sl1Vals.length > 0) setRefVal(mx, 'slope1Min', parseFloat(Math.min.apply(null, sl1Vals).toFixed(1)));
@@ -624,12 +629,12 @@ function retroactiveLogRecalculate() {
     var origComp = parseFloat(row[mMap.origCompBase]);
     if (isNaN(origComp) || origComp === 0) { 
       origComp = c1M; 
-      setRefVal(mx, 'origCompBase', parseFloat(origComp.toFixed(1))); 
+      if (origComp > 0) setRefVal(mx, 'origCompBase', parseFloat(origComp.toFixed(1))); 
     }
     var origReb = parseFloat(row[mMap.origRebBase]);
     if (isNaN(origReb) || origReb === 0) { 
       origReb = r1M; 
-      setRefVal(mx, 'origRebBase', parseFloat(origReb.toFixed(1))); 
+      if (origReb > 0) setRefVal(mx, 'origRebBase', parseFloat(origReb.toFixed(1))); 
     }
 
     setRefVal(mx, 'rawCompSD', parseFloat(c1S.toFixed(2))); 
@@ -640,8 +645,9 @@ function retroactiveLogRecalculate() {
     setRefVal(mx, 'compRangeWidth', parseFloat(cWidth.toFixed(1))); 
     setRefVal(mx, 'rebRangeWidth', parseFloat(rWidth.toFixed(1)));
 
-    var compDrift = (origComp !== 0 && !isNaN(origComp)) ? (((c1M - origComp) / origComp) * 100) : 0;
-    var rebDrift  = (origReb !== 0 && !isNaN(origReb)) ? (((r1M - origReb) / origReb) * 100) : 0;
+    // Safely calculate drift without NaN corruption
+    var compDrift = (origComp !== 0 && !isNaN(origComp) && c1M > 0) ? (((c1M - origComp) / origComp) * 100) : 0;
+    var rebDrift  = (origReb !== 0 && !isNaN(origReb) && r1M > 0) ? (((r1M - origReb) / origReb) * 100) : 0;
     setRefVal(mx, 'compDriftPct', parseFloat(compDrift.toFixed(2))); 
     setRefVal(mx, 'rebDriftPct', parseFloat(rebDrift.toFixed(2)));
 
@@ -660,7 +666,7 @@ function retroactiveLogRecalculate() {
     setRefVal(mx, 'sampleCount', countN);
   }
 
-  // MASS BATCH WRITE TO MATRIX (Ensured uniform dimensions)
+  // MASS BATCH WRITE TO MATRIX (Ensured exact 42-column uniformity)
   if (refData.length > 0) {
     refSheet.getRange(1, 1, refData.length, TARGET_COLS).setValues(refData);
   }

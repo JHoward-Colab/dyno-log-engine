@@ -40,9 +40,11 @@ function clickMasterSyncButton() {
   // 4. Force immediate flush to screen so user sees results without delay
   SpreadsheetApp.flush();
 
-  // 5. Fast Summary Dashboard build (uses cached metadata, < 1 second)
+  // 5. Fast Summary Dashboard build (bounded to 4 seconds to prevent lag)
   try {
-    if (typeof buildSummaryDashboard === "function") {
+    if (typeof runFullSystemIndexer === "function") {
+      runFullSystemIndexer(4000); // Only run for 4 seconds so UI stays fast
+    } else if (typeof buildSummaryDashboard === "function") {
       buildSummaryDashboard();
     }
   } catch(e) {
@@ -272,7 +274,7 @@ function manageOperatorStation(e) {
 
           var currentScore = 0;
 
-          // STRICT MATCH HIERARCHY
+         // STRICT MATCH HIERARCHY
           if (cleanBase && cleanBase === cleanWoPart) {
             currentScore = 10;
           } else if (cleanDynKey && cleanDynKey === cleanWoPart) {
