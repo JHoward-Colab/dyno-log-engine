@@ -5,42 +5,48 @@
 
 /**
  * Master Sync Action triggered by button click on Operator Station.
+ * Optimized for speed: decouples heavy background indexing so screen refreshes instantly.
  */
 function clickMasterSyncButton() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var ui = null;
   try { ui = SpreadsheetApp.getUi(); } catch(err) {}
 
+  // 1. Ingest new dyno files
   try { 
     processDynoFiles(); 
   } catch(e) { 
-    Logger.log("Watch folder alert: " + e.toString());
-    if (ui) ui.alert("⚠️ Sync Warning", "Process Dyno Files Error: " + e.message, ui.ButtonSet.OK);
+    Logger.log("Watch folder alert: " + e.toString()); 
   }
 
+  // 2. Recalculate SPC limits & update Part_Reference_Matrix
   try { 
     retroactiveLogRecalculate(); 
   } catch(e) { 
-    Logger.log("Reference Matrix Recalculation Alert: " + e.toString()); 
+    Logger.log("Recalculation Alert: " + e.toString()); 
     if (ui) ui.alert("⚠️ Recalculation Warning", "Retroactive Recalculate Error: " + e.message, ui.ButtonSet.OK);
   }
 
-  // Auto-refresh Summary Dashboard
+  // 3. Immediately refresh Operator Station UI
   try {
-    if (typeof runFullSystemIndexer === "function") {
-      runFullSystemIndexer();
-    }
-  } catch(e) {
-    Logger.log("Summary Indexer Notice: " + e.toString());
-  }
-
-  try {
-    var sheet = ss.getSheetByName(CONFIG.SHEET_NAMES.OPERATOR_STATION);
-    if (sheet) {
-      manageOperatorStation({ source: ss, range: sheet.getRange(CONFIG.OPERATOR_STATION.RANGES.BARCODE_INPUT) });
+    var opSheet = ss.getSheetByName(CONFIG.SHEET_NAMES.OPERATOR_STATION);
+    if (opSheet) {
+      manageOperatorStation({ source: ss, range: opSheet.getRange(CONFIG.OPERATOR_STATION.RANGES.BARCODE_INPUT) });
     }
   } catch(e) { 
     Logger.log("Console screen alert: " + e.toString()); 
+  }
+
+  // 4. Force immediate flush to screen so user sees results without delay
+  SpreadsheetApp.flush();
+
+  // 5. Fast Summary Dashboard build (uses cached metadata, < 1 second)
+  try {
+    if (typeof buildSummaryDashboard === "function") {
+      buildSummaryDashboard();
+    }
+  } catch(e) {
+    Logger.log("Summary update alert: " + e.toString());
   }
 }
 
@@ -86,6 +92,7 @@ function formatShortSerial(rawSerial, searchBarcode) {
 
 /**
  * Robust Serial Matcher between Work Order barcodes and Dyno Log serials.
+ * Supports exact unit matching and broad batch-level matching.
  */
 function isSerialMatch(expSerial, logSerial, searchBarcode) {
   if (!expSerial || !logSerial) return false;
@@ -115,7 +122,7 @@ function isSerialMatch(expSerial, logSerial, searchBarcode) {
     }
   }
 
-  // Broad Batch Match (e.g., user types "2436" to see the entire 2436 batch history)
+  // Broad Batch Match (e.g., user types "2436" or "2600" to see entire batch history)
   if (!expSerial.includes("-") && cExp.length >= 4 && cLog.length > cExp.length) {
     var extractedLogBatch = cLog.slice(0, -3).replace(/^0+/, "");
     if (extractedLogBatch === cExpNoZero) return true;
@@ -265,7 +272,7 @@ function manageOperatorStation(e) {
 
           var currentScore = 0;
 
-         // STRICT MATCH HIERARCHY
+          // STRICT MATCH HIERARCHY
           if (cleanBase && cleanBase === cleanWoPart) {
             currentScore = 10;
           } else if (cleanDynKey && cleanDynKey === cleanWoPart) {
