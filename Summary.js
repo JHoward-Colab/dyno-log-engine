@@ -187,10 +187,7 @@ function runFullSystemIndexer() {
  */
 function buildSummaryDashboard() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
-  var summarySheet = ss.getSheetByName(CONFIG.SHEET_NAMES.SUMMARY) || 
-                     ss.getSheetByName("Summary") || 
-                     ss.getSheetByName("WOSYS") || 
-                     ss.getSheetByName("Summary Dashboard");
+  var summarySheet = ss.getSheetByName(CONFIG.SHEET_NAMES.SUMMARY) || ss.getSheetByName("Summary") || ss.getSheetByName("WOSYS") || ss.getSheetByName("Summary Dashboard");
   var logSheet = ss.getSheetByName(CONFIG.SHEET_NAMES.MASTER_DYNO_LOG);
 
   if (!summarySheet || !logSheet) return;
@@ -432,7 +429,7 @@ function onSelectionChange(e) {
 
   var sheet = range.getSheet();
   var cleanName = cleanKey(sheet.getName());
-  if (cleanName === "summary" || cleanName === "wosys") {
+  if (cleanName === "summary" || cleanName === "wosys" || cleanName.indexOf("summary") !== -1) {
     var col = range.getColumn();
     var row = range.getRow();
 
@@ -464,9 +461,7 @@ function onSelectionChange(e) {
               value: pureBatchStr,
               oldValue: ""
             });
-          } catch (err) {
-            Logger.log("Operator Station execution alert: " + err.toString());
-          }
+          } catch (err) {}
         }
       }
     }

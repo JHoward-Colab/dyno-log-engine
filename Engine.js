@@ -1,5 +1,5 @@
 // =========================================================================
-// 🏎️ UNIFIED DYNO ENGINE (Engine.gs)
+// 🏎️ UNIFIED DYNO ENGINE (Engine.js)
 // Adaptive Multi-File Ingestion, Hysteresis Regression & Staged SPC Engine
 // =========================================================================
 
@@ -71,14 +71,12 @@ function buildHeaderMap(headerRow) {
   for (var i = 0; i < headerRow.length; i++) {
     var cleanH = String(headerRow[i] || "").toLowerCase().replace(/[^a-z0-9]/g, "");
     if (cleanH.indexOf("diagnostic") !== -1) continue;
-
     if (cleanH.indexOf("evaluation") !== -1 || cleanH === "action" || cleanH.indexOf("evalaction") !== -1) {
       map.evaluationAction = i;
     } else if (cleanH.indexOf("engcomment") !== -1 || cleanH.indexOf("engineeringcomment") !== -1 || (cleanH.indexOf("comment") !== -1 && cleanH.indexOf("diagnostic") === -1)) {
       map.engComments = i;
     }
   }
-  
   return map;
 }
 
@@ -409,7 +407,7 @@ function processDynoFiles() {
 }
 
 // =========================================================================
-// HISTORICAL RE-RUN ENGINE (ADAPTIVE SPC, MEMORY BATCHING & RATCHET)
+// HISTORICAL RE-RUN ENGINE (SELF-HEALING STAGED SPC RECALCULATOR)
 // =========================================================================
 function retroactiveLogRecalculate() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -422,9 +420,24 @@ function retroactiveLogRecalculate() {
   var logData = logRange.getValues(); 
   if (logData.length < 2) return;
   var hMap = buildHeaderMap(logData[0]);
-  var refData = refSheet.getDataRange().getValues();
-  var mMap = buildMatrixHeaderMap(refData[0]);
-  
+
+  // Ensure sheet grid has at least 42 columns to prevent setValues dimensional abort
+  var TARGET_COLS = 42;
+  if (refSheet.getMaxColumns() < TARGET_COLS) {
+    refSheet.insertColumnsAfter(refSheet.getMaxColumns(), TARGET_COLS - refSheet.getMaxColumns());
+  }
+
+  var rawRefData = refSheet.getDataRange().getValues();
+  var mMap = buildMatrixHeaderMap(rawRefData[0]);
+
+  // Normalize all existing rows to uniform 42-width array
+  var refData = [];
+  for (var i = 0; i < rawRefData.length; i++) {
+    var r = rawRefData[i].slice();
+    while (r.length < TARGET_COLS) r.push("");
+    refData.push(r);
+  }
+
   var mean = function(arr) { 
     var clean = arr.filter(function(x){ return !isNaN(x); }); 
     return clean.length === 0 ? 0 : clean.reduce(function(a,b){ return a+b; },0)/clean.length; 
@@ -437,12 +450,11 @@ function retroactiveLogRecalculate() {
     return String(s || "").trim().toLowerCase().replace(/[-_\s]/g, ""); 
   };
 
-  // Helper to safely write to the in-memory array
   function setRefVal(mx, colKey, val) {
     if (mMap[colKey] !== undefined) refData[mx][mMap[colKey]] = val;
   }
 
-  // STEP 0: Build Mapping Dictionary & Seed Matrix
+  // STEP 0: Seed Matrix from Program_Registry
   var modelToDynamicKey = {};
   var existingMatrixKeys = {};
   for (var m = 1; m < refData.length; m++) {
@@ -467,7 +479,7 @@ function retroactiveLogRecalculate() {
       if (pnClean) modelToDynamicKey[pnClean] = targetKey;
 
       if (cleanTargetKey && !existingMatrixKeys[cleanTargetKey]) {
-        var newRefRow = new Array(42).fill("");
+        var newRefRow = new Array(TARGET_COLS).fill("");
         newRefRow[mMap.dynamicKey] = targetKey;
         rowsToAppend.push(newRefRow);
         existingMatrixKeys[cleanTargetKey] = refData.length + rowsToAppend.length;
@@ -479,7 +491,7 @@ function retroactiveLogRecalculate() {
     refData = refData.concat(rowsToAppend);
   }
 
-  // STEP 1: Progressive Staged Learning & Limit Refining (Memory Batched)
+  // STEP 1: Progressive Staged Learning & Limit Refining
   for (var mx = 1; mx < refData.length; mx++) {
     var matrixKey = String(refData[mx][mMap.dynamicKey] || "").trim();
     if (!matrixKey) continue;
@@ -501,7 +513,7 @@ function retroactiveLogRecalculate() {
     var countN = pool.length;
     var row = refData[mx];
 
-    // Filter training pool to valid passing runs (Exclude Prototypes and Failures)
+    // Filter training pool to valid passing runs (Exclude Failures and Prototypes)
     var passPool = [];
     for (var pIdx = 0; pIdx < pool.length; pIdx++) {
       var pRow = pool[pIdx];
@@ -563,7 +575,7 @@ function retroactiveLogRecalculate() {
     var c2M = mean(c2Vals), c2S = sd(c2Vals, c2M); 
     var r2M = mean(r2Vals), r2S = sd(r2Vals, r2M);
 
-    // Progressive SPC Stage Tightening
+    // Staged Tolerance Tightening
     var stageNum = 1; 
     var sigmaMult = 3.0; 
     var pctCap = 0.15;
@@ -577,7 +589,7 @@ function retroactiveLogRecalculate() {
 
     function calcAdaptiveLimits(meanVal, sdVal) {
       var effSpread = (sdVal > 0) ? Math.min(sigmaMult * sdVal, meanVal * pctCap) : (meanVal * pctCap);
-      if (effSpread < meanVal * 0.03) effSpread = meanVal * 0.03; // 3% safety buffer
+      if (effSpread < meanVal * 0.03) effSpread = meanVal * 0.03;
       return { min: parseFloat((meanVal - effSpread).toFixed(1)), max: parseFloat((meanVal + effSpread).toFixed(1)) };
     }
 
@@ -648,8 +660,10 @@ function retroactiveLogRecalculate() {
     setRefVal(mx, 'sampleCount', countN);
   }
 
-  // MASS BATCH WRITE
-  refSheet.getRange(1, 1, refData.length, refData[0].length).setValues(refData);
+  // MASS BATCH WRITE TO MATRIX (Ensured uniform dimensions)
+  if (refData.length > 0) {
+    refSheet.getRange(1, 1, refData.length, TARGET_COLS).setValues(refData);
+  }
 
   // STEP 2: Compute Batch Statistics
   var batchGroups = {};

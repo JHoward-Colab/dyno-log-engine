@@ -115,6 +115,12 @@ function isSerialMatch(expSerial, logSerial, searchBarcode) {
     }
   }
 
+  // Broad Batch Match (e.g., user types "2436" to see the entire 2436 batch history)
+  if (!expSerial.includes("-") && cExp.length >= 4 && cLog.length > cExp.length) {
+    var extractedLogBatch = cLog.slice(0, -3).replace(/^0+/, "");
+    if (extractedLogBatch === cExpNoZero) return true;
+  }
+
   return false;
 }
 
@@ -259,7 +265,7 @@ function manageOperatorStation(e) {
 
           var currentScore = 0;
 
-          // STRICT MATCH HIERARCHY
+         // STRICT MATCH HIERARCHY
           if (cleanBase && cleanBase === cleanWoPart) {
             currentScore = 10;
           } else if (cleanDynKey && cleanDynKey === cleanWoPart) {
@@ -560,12 +566,7 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber,
       var mappedRow = [
         displaySerial,                                    
         "", "", "", "", "",                               
-        "NOT TESTED YET",                                 
-        "NOT TESTED YET",                                 
-        "NOT TESTED YET",                                 
-        "",                                               
-        "⏳ Unit pending dyno test.",                     
-        ""                                                
+        "NOT TESTED YET", "NOT TESTED YET", "NOT TESTED YET", "", "⏳ Unit pending dyno test.", ""
       ];
       rowsToDisplay.push(mappedRow);
     }
@@ -719,13 +720,14 @@ function installableOnEdit(e) {
   var sheetName = sheet.getName();
   var cleanSheetName = cleanKey(sheetName);
 
-  // Flexible router for Serial History Viewer tab
+  // Flexible router for Serial History Viewer tab (Fixes Merged Cell Bug)
   if (cleanSheetName.indexOf("history") !== -1 || cleanSheetName.indexOf("shv") !== -1) {
     var searchCell = (CONFIG.SERIAL_HISTORY_VIEWER && CONFIG.SERIAL_HISTORY_VIEWER.RANGES) 
       ? CONFIG.SERIAL_HISTORY_VIEWER.RANGES.SERIAL_SEARCH_INPUT 
       : "B2";
       
-    if (e.range.getA1Notation().toUpperCase() === searchCell.toUpperCase()) {
+    var targetRange = sheet.getRange(searchCell);
+    if (e.range.getRow() === targetRange.getRow() && e.range.getColumn() === targetRange.getColumn()) {
       if (typeof renderSerialHistory === "function") {
         renderSerialHistory(e);
       }
@@ -734,7 +736,7 @@ function installableOnEdit(e) {
   }
 
   if (sheetName === CONFIG.SHEET_NAMES.OPERATOR_STATION) {
-    try { manageOperatorStation(e); } catch(err) { Logger.log("Operator station edit error: " + err.toString()); }
+    try { manageOperatorStation(e); } catch(err) {}
     return;
   }
 
@@ -752,9 +754,7 @@ function installableOnEdit(e) {
             source: ss,
             range: opSheet.getRange(CONFIG.OPERATOR_STATION.RANGES.BARCODE_INPUT)
           });
-        } catch(err) {
-          Logger.log("Notice: UI refresh skipped.");
-        }
+        } catch(err) {}
       }
     }
   }
@@ -765,20 +765,13 @@ function installableOnEdit(e) {
  */
 function setupTriggers() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
-  
   var triggers = ScriptApp.getUserTriggers(ss);
   for (var i = 0; i < triggers.length; i++) {
     if (triggers[i].getHandlerFunction() === "installableOnEdit") {
       ScriptApp.deleteTrigger(triggers[i]);
     }
   }
-
-  ScriptApp.newTrigger("installableOnEdit")
-    .forSpreadsheet(ss)
-    .onEdit()
-    .create();
-
-  Logger.log("Successfully installed OnEdit trigger for installableOnEdit.");
+  ScriptApp.newTrigger("installableOnEdit").forSpreadsheet(ss).onEdit().create();
 }
 
 /**
