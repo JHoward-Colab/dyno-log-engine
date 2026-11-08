@@ -43,7 +43,7 @@ function clickMasterSyncButton() {
   // 5. Fast Summary Dashboard build (bounded to 4 seconds to prevent lag)
   try {
     if (typeof runFullSystemIndexer === "function") {
-      runFullSystemIndexer(4000); // Only run for 4 seconds so UI stays fast
+      runFullSystemIndexer(4000);
     } else if (typeof buildSummaryDashboard === "function") {
       buildSummaryDashboard();
     }
@@ -274,7 +274,7 @@ function manageOperatorStation(e) {
 
           var currentScore = 0;
 
-         // STRICT MATCH HIERARCHY
+          // STRICT MATCH HIERARCHY
           if (cleanBase && cleanBase === cleanWoPart) {
             currentScore = 10;
           } else if (cleanDynKey && cleanDynKey === cleanWoPart) {
@@ -628,6 +628,7 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber,
     var diagnosticsStr = String(rowData[10] || "");
 
     var isProto = overallStatStr.includes("PROTOTYPE") || overallStatStr.includes("NOT EVALUATED");
+    var isPassingUnit = overallStatStr.includes("PASS");
 
     var applyRedHighlight = function(colIndex) {
       if (!isProto) {
@@ -650,7 +651,8 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber,
     var c2Val = parseFloat(rowData[4]);
     var r2Val = parseFloat(rowData[5]);
 
-    if (!isProto) {
+    // ONLY highlight individual cells red if the unit is NOT passing[cite: 4]
+    if (!isProto && !isPassingUnit) {
       if (!isNaN(c1Val) && ((!isNaN(limits.c1Min) && c1Val < limits.c1Min) || (!isNaN(limits.c1Max) && c1Val > limits.c1Max))) applyRedHighlight(2);
       if (!isNaN(r1Val) && ((!isNaN(limits.r1Min) && r1Val < limits.r1Min) || (!isNaN(limits.r1Max) && r1Val > limits.r1Max))) applyRedHighlight(3);
       if (!isNaN(c2Val) && ((!isNaN(limits.c2Min) && c2Val < limits.c2Min) || (!isNaN(limits.c2Max) && c2Val > limits.c2Max))) applyRedHighlight(4);

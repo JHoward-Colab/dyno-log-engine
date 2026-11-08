@@ -434,7 +434,7 @@ function retroactiveLogRecalculate() {
   // Normalize all existing rows to uniform 42-width array
   var refData = [];
   for (var i = 0; i < rawRefData.length; i++) {
-    var r = rawRefData[i].slice(0, TARGET_COLS); // Force strict width
+    var r = rawRefData[i].slice(0, TARGET_COLS);
     while (r.length < TARGET_COLS) r.push("");
     refData.push(r);
   }
@@ -535,10 +535,8 @@ function retroactiveLogRecalculate() {
     var s1Vals = [], s2Vals = [], s3Vals = [];
     var sl1Vals = [], la1Vals = [], sl2Vals = [];
 
-    // FIXED: Safely parsing numbers. If a cell was blank, it previously pushed a '0' and destroyed the SPC average.
     for (var s = 0; s < trainingPool.length; s++) {
       var d = trainingPool[s];
-      
       var vC1 = parseFloat(d[hMap.comp1]); if (!isNaN(vC1) && vC1 > 0) c1Vals.push(vC1);
       var vR1 = Math.abs(parseFloat(d[hMap.reb1])); if (!isNaN(vR1) && vR1 > 0) r1Vals.push(vR1);
       var vC2 = parseFloat(d[hMap.comp2]); if (!isNaN(vC2) && vC2 > 0) c2Vals.push(vC2);
@@ -578,21 +576,21 @@ function retroactiveLogRecalculate() {
     var c2M = mean(c2Vals), c2S = sd(c2Vals, c2M); 
     var r2M = mean(r2Vals), r2S = sd(r2Vals, r2M);
 
-    // Staged Tolerance Tightening (Widened for realistic mechanical variance)
+    // Mechanical Damper Staged Tolerances (Calibrated for real shop variance)
     var stageNum = 1; 
     var sigmaMult = 3.5; 
-    var pctCap = 0.25;
+    var pctCap = 0.25; 
     if (countN >= 100) { 
-      stageNum = 4; sigmaMult = 2.5; pctCap = 0.15; 
+      stageNum = 4; sigmaMult = 3.0; pctCap = 0.18; 
     } else if (countN >= 40) { 
-      stageNum = 3; sigmaMult = 2.8; pctCap = 0.18; 
+      stageNum = 3; sigmaMult = 3.0; pctCap = 0.20; 
     } else if (countN >= 15) { 
-      stageNum = 2; sigmaMult = 3.0; pctCap = 0.20; 
+      stageNum = 2; sigmaMult = 3.2; pctCap = 0.22; 
     }
 
     function calcAdaptiveLimits(meanVal, sdVal) {
       var effSpread = (sdVal > 0) ? Math.min(sigmaMult * sdVal, meanVal * pctCap) : (meanVal * pctCap);
-      if (effSpread < meanVal * 0.03) effSpread = meanVal * 0.03;
+      if (effSpread < meanVal * 0.05) effSpread = meanVal * 0.05;
       return { min: parseFloat((meanVal - effSpread).toFixed(1)), max: parseFloat((meanVal + effSpread).toFixed(1)) };
     }
 
@@ -645,7 +643,6 @@ function retroactiveLogRecalculate() {
     setRefVal(mx, 'compRangeWidth', parseFloat(cWidth.toFixed(1))); 
     setRefVal(mx, 'rebRangeWidth', parseFloat(rWidth.toFixed(1)));
 
-    // Safely calculate drift without NaN corruption
     var compDrift = (origComp !== 0 && !isNaN(origComp) && c1M > 0) ? (((c1M - origComp) / origComp) * 100) : 0;
     var rebDrift  = (origReb !== 0 && !isNaN(origReb) && r1M > 0) ? (((r1M - origReb) / origReb) * 100) : 0;
     setRefVal(mx, 'compDriftPct', parseFloat(compDrift.toFixed(2))); 
@@ -653,20 +650,29 @@ function retroactiveLogRecalculate() {
 
     var maxDrift = Math.max(Math.abs(compDrift), Math.abs(rebDrift));
     var procHealth = "";
-    if (maxDrift >= 8) {
+    if (maxDrift >= 10) {
       procHealth = "🔴 CRITICAL DRIFT (" + (Math.abs(rebDrift) >= Math.abs(compDrift) ? "Reb" : "Comp") + " vs Origin)";
-    } else if (maxDrift >= 4) {
+    } else if (maxDrift >= 5) {
       procHealth = "🟡 MODERATE DRIFT (" + (Math.abs(rebDrift) >= Math.abs(compDrift) ? "Reb" : "Comp") + " vs Origin)";
     } else {
-      procHealth = "🟢 STABLE (" + maxDrift.toFixed(1) + "% drift)";
+      procHealth = "🟢 Stage " + stageNum + " (" + sigmaMult + "σ) | STABLE (" + maxDrift.toFixed(1) + "% drift)";
     }
     
+    // Column AO: Freeform Health & Stage tracking
     setRefVal(mx, 'healthStamp', procHealth);
-    setRefVal(mx, 'controlMode', isManuallyLocked ? "MANUAL LOCKED SPEC" : ("ADAPTIVE SPC (Stage " + stageNum + " | " + sigmaMult + "σ | N=" + countN + ")"));
+
+    // Column AP: Strict Dropdown Match (Eliminates validation error)
+    var validDropdownControlMode = "MANUAL GRACE LIMITS LOADED";
+    if (countN >= 10 && !isManuallyLocked) {
+      validDropdownControlMode = "AUTOMATED STATISTICAL SPC LAYER ACTIVE";
+    } else if (countN >= 10 && isManuallyLocked) {
+      validDropdownControlMode = "HYBRID: SEEDED BLUEPRINT WITH ACTIVE SPC";
+    }
+    setRefVal(mx, 'controlMode', validDropdownControlMode);
     setRefVal(mx, 'sampleCount', countN);
   }
 
-  // MASS BATCH WRITE TO MATRIX (Ensured exact 42-column uniformity)
+  // MASS BATCH WRITE TO MATRIX
   if (refData.length > 0) {
     refSheet.getRange(1, 1, refData.length, TARGET_COLS).setValues(refData);
   }
