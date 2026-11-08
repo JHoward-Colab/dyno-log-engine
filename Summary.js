@@ -4,15 +4,6 @@
 // =========================================================================
 
 /**
- * Normalizes string keys by stripping non-alphanumeric characters and lowercasing.
- * Exact copy from UI.js.
- */
-function cleanKey(val) {
-  if (val === null || val === undefined) return "";
-  return String(val).toLowerCase().replace(/[^a-z0-9]/g, "");
-}
-
-/**
  * Robustly extracts pure WO batch number from barcodes or file names.
  */
 function robustExtractWoBatchNum(strVal) {
@@ -39,36 +30,7 @@ function robustExtractWoBatchNum(strVal) {
 }
 
 /**
- * Robust Serial Matcher between Work Order barcodes and Dyno Log serials.
- * Exact copy from UI.js.
- */
-function isSerialMatch(expSerial, logSerial) {
-  var cExp = cleanKey(expSerial);
-  var cLog = cleanKey(logSerial);
-  if (!cExp || !cLog) return false;
-
-  if (cExp === cLog) return true;
-  if (cExp.endsWith(cLog) || cLog.endsWith(cExp)) return true;
-
-  var cLogNoZero = cLog.replace(/^0+/, "");
-  var cExpNoZero = cExp.replace(/^0+/, "");
-  if (cExp.endsWith(cLogNoZero) || cLog.endsWith(cExpNoZero)) return true;
-
-  if (cExp.length >= 6 && cLog.length >= 3) {
-    var expUnit = cExp.slice(-3);
-    var logUnit = cLog.slice(-3);
-    if (expUnit === logUnit) {
-      var logBatch = cLog.slice(0, -3).replace(/^0+/, "");
-      if (logBatch && cExp.indexOf(logBatch) !== -1) return true;
-    }
-  }
-
-  return false;
-}
-
-/**
  * Builds header map for Summary Dashboard columns specifically.
- * Renamed buildSummaryHeaderMap to avoid global function collision with Engine.js.
  */
 function buildSummaryHeaderMap(headers) {
   var map = {
@@ -221,11 +183,14 @@ function runFullSystemIndexer() {
 }
 
 /**
- * Builds Summary Dashboard mirroring UI.js cell A8 decision logic and renderOperatorTableWithFormatting().
+ * Builds Summary Dashboard mirroring UI.js cell A8 decision logic.
  */
 function buildSummaryDashboard() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
-  var summarySheet = ss.getSheetByName(CONFIG.SHEET_NAMES.SUMMARY);
+  var summarySheet = ss.getSheetByName(CONFIG.SHEET_NAMES.SUMMARY) || 
+                     ss.getSheetByName("Summary") || 
+                     ss.getSheetByName("WOSYS") || 
+                     ss.getSheetByName("Summary Dashboard");
   var logSheet = ss.getSheetByName(CONFIG.SHEET_NAMES.MASTER_DYNO_LOG);
 
   if (!summarySheet || !logSheet) return;
@@ -351,7 +316,7 @@ function buildSummaryDashboard() {
       for (var lIdx = 0; lIdx < logSerialKeys.length; lIdx++) {
         var logKey = logSerialKeys[lIdx];
         var logItem = latestLogBySerial[logKey];
-        if (isSerialMatch(expS, logItem.trueSerial)) {
+        if (isSerialMatch(expS, logItem.trueSerial, searchBarcode)) {
           matchedLogItem = logItem;
           break;
         }
@@ -458,7 +423,6 @@ function clearWoSummaryCache() {
 
 /**
  * Interactive Column 1 Click Navigator.
- * Populates pure numeric batch digits (e.g. 1905, 1634) into cell C3.
  */
 function onSelectionChange(e) {
   if (!e || !e.range) return;
@@ -467,7 +431,8 @@ function onSelectionChange(e) {
   if (range.getNumRows() > 1 || range.getNumColumns() > 1) return;
 
   var sheet = range.getSheet();
-  if (sheet.getName() === CONFIG.SHEET_NAMES.SUMMARY) {
+  var cleanName = cleanKey(sheet.getName());
+  if (cleanName === "summary" || cleanName === "wosys") {
     var col = range.getColumn();
     var row = range.getRow();
 
@@ -482,7 +447,7 @@ function onSelectionChange(e) {
       var opSheet = ss.getSheetByName(CONFIG.SHEET_NAMES.OPERATOR_STATION);
 
       if (opSheet) {
-        var targetCellKey = (CONFIG.OPERATOR_STATION && CONFIG.OPERATOR_STATION.RANGES && CONFIG.OPERATOR_STATION.RANGES.BARCODE_INPUT) ? CONFIG.OPERATOR_STATION.RANGES.BARCODE_INPUT : "C3";
+        var targetCellKey = (CONFIG.OPERATOR_STATION && CONFIG.OPERATOR_STATION.RANGES && CONFIG.OPERATOR_STATION.RANGES.BARCODE_INPUT) ? CONFIG.OPERATOR_STATION.RANGES.BARCODE_INPUT : "C2";
         var targetRange = opSheet.getRange(targetCellKey);
         
         var pureBatchStr = String(woBatch);

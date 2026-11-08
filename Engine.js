@@ -1,6 +1,6 @@
 // =========================================================================
 // 🏎️ UNIFIED DYNO ENGINE (Engine.gs)
-// Adaptive Multi-File Ingestion, Hysteresis Regression & SPC Recalculator
+// Adaptive Multi-File Ingestion, Hysteresis Regression & Staged SPC Engine
 // =========================================================================
 
 /**
@@ -174,11 +174,16 @@ function processDynoFiles() {
   var now = new Date();
   
   while (files.hasNext()) {
-    var file = files.next(); var rawName = file.getName(); var lastUpdated = file.getLastUpdated().getTime();
+    var file = files.next(); 
+    var rawName = file.getName(); 
+    var lastUpdated = file.getLastUpdated().getTime();
     if (rawName.toLowerCase().endsWith('.csv') || rawName.toLowerCase().endsWith('.txt')) {
-      var fileName = rawName.replace(/\.csv$/i, "").replace(/\.txt$/i, "").trim(); var tempGroupKey = "";
+      var fileName = rawName.replace(/\.csv$/i, "").replace(/\.txt$/i, "").trim(); 
+      var tempGroupKey = "";
       var serialMatch = rawName.match(/\d{6}-\d{3}/) || rawName.match(/\d+-\d+/);
-      if (serialMatch) { tempGroupKey = serialMatch[0].trim(); } else {
+      if (serialMatch) { 
+        tempGroupKey = serialMatch[0].trim(); 
+      } else {
         var clearParts = fileName.split(/[\s_]+/);
         tempGroupKey = clearParts.length >= 3 ? clearParts[clearParts.length - 2].trim() : clearParts[0].trim();
       }
@@ -197,7 +202,8 @@ function processDynoFiles() {
         }
       }
       if (detectedModel === "" || detectedModel.startsWith('_PROCESSING_')) {
-        var rawParts = fileName.split(/[\s_]+/); detectedModel = rawParts[0].replace('_PROCESSING_', '');
+        var rawParts = fileName.split(/[\s_]+/); 
+        detectedModel = rawParts[0].replace('_PROCESSING_', '');
         if (rawParts[1] && rawParts[1].toUpperCase().startsWith('V')) { detectedModel += "_" + rawParts[1]; }
       }
       
@@ -220,7 +226,8 @@ function processDynoFiles() {
     }
   }
   
-  var registrySheet = ss.getSheetByName(CONFIG.SHEET_NAMES.PROGRAM_REGISTRY); var registryData = registrySheet ? registrySheet.getDataRange().getValues() : [];
+  var registrySheet = ss.getSheetByName(CONFIG.SHEET_NAMES.PROGRAM_REGISTRY); 
+  var registryData = registrySheet ? registrySheet.getDataRange().getValues() : [];
   var masterLogData = sheet.getDataRange().getValues();
   var hMap = buildHeaderMap(masterLogData[0]);
   
@@ -230,7 +237,8 @@ function processDynoFiles() {
       if ((now.getTime() - pack.youngestFileTime) / 1000 < 4) continue;
       try {
         var rawBlobStr = pack.pvp.getBlob().getDataAsString("UTF-8").trim();
-        var pvpContent = parseCsvRobust(rawBlobStr); var trueSerial = tempKey;
+        var pvpContent = parseCsvRobust(rawBlobStr); 
+        var trueSerial = tempKey;
         var trueDynoProgramName = pack.parsedBaseModel;
         
         if (trueDynoProgramName.length > 20) {
@@ -241,11 +249,13 @@ function processDynoFiles() {
         for (var rR = 1; rR < registryData.length; rR++) {
           var regKey = String(registryData[rR][0] || "").trim().replace(/[-_\s]/g, "").toLowerCase();
           if (regKey === cleanTrueProgName) {
-            trueDynoProgramName = String(registryData[rR][0] || "").trim(); break;
+            trueDynoProgramName = String(registryData[rR][0] || "").trim(); 
+            break;
           }
         }
         
-        var registryBaseModelText = trueDynoProgramName; var registryValvingVersion = "PRODUCTION_RUN";
+        var registryBaseModelText = trueDynoProgramName; 
+        var registryValvingVersion = "PRODUCTION_RUN";
         var cleanMatchName = trueDynoProgramName.replace(/[-_\s]/g, "").toLowerCase();
         for (var regR = 1; regR < registryData.length; regR++) {
           var cleanRegCell = String(registryData[regR][0] || "").trim().replace(/[-_\s]/g, "").toLowerCase();
@@ -256,11 +266,20 @@ function processDynoFiles() {
           }
         }
         
-        var rawRodForce = 0; var intervalMetrics = [];
+        var rawRodForce = 0; 
+        var intervalMetrics = [];
         for (var i = 0; i < pack.intervals.length; i++) {
-          var file = pack.intervals[i]; var rawIntStr = file.getBlob().getDataAsString("UTF-8").trim();
-          if (rawIntStr === "") continue; var rows = parseCsvRobust(rawIntStr); var speedTarget = 0;
-          for (var j = 0; j < Math.min(rows.length, 15); j++) { if (rows[j][0] && rows[j][0].trim().toLowerCase() == "velocity amplitude") { speedTarget = parseInt(rows[j][1]); break; } }
+          var file = pack.intervals[i]; 
+          var rawIntStr = file.getBlob().getDataAsString("UTF-8").trim();
+          if (rawIntStr === "") continue; 
+          var rows = parseCsvRobust(rawIntStr); 
+          var speedTarget = 0;
+          for (var j = 0; j < Math.min(rows.length, 15); j++) { 
+            if (rows[j][0] && rows[j][0].trim().toLowerCase() == "velocity amplitude") { 
+              speedTarget = parseInt(rows[j][1]); 
+              break; 
+            } 
+          }
           
           if (!speedTarget || isNaN(speedTarget)) {
             for (var r = 14; r < rows.length; r++) {
@@ -272,16 +291,30 @@ function processDynoFiles() {
           }
           speedTarget = snapToNominalSpeed(speedTarget);
           
-          for (var j = 0; j < rows.length; j++) { if (rows[j][0] && rows[j][0].trim().toLowerCase() == "rod force") { rawRodForce = parseFloat(rows[j][1]); break; } }
+          for (var j = 0; j < rows.length; j++) { 
+            if (rows[j][0] && rows[j][0].trim().toLowerCase() == "rod force") { 
+              rawRodForce = parseFloat(rows[j][1]); 
+              break; 
+            } 
+          }
           var maxComp = -9999, maxReb = 9999, totalArea = 0, nearZeroPoints = [];
           for (var r = 14; r < rows.length; r++) {
             if (rows[r].length < 2 || isNaN(parseFloat(rows[r][0]))) continue;
-            var vel = parseFloat(rows[r][0]); var force = parseFloat(rows[r][1]);
-            if (force > maxComp) maxComp = force; if (force < maxReb) maxReb = force;
-            totalArea += Math.abs(force); if (Math.abs(vel) < ((speedTarget || 500) * 0.15)) nearZeroPoints.push({ x: vel, y: force });
+            var vel = parseFloat(rows[r][0]); 
+            var force = parseFloat(rows[r][1]);
+            if (force > maxComp) maxComp = force; 
+            if (force < maxReb) maxReb = force;
+            totalArea += Math.abs(force); 
+            if (Math.abs(vel) < ((speedTarget || 500) * 0.15)) nearZeroPoints.push({ x: vel, y: force });
           }
           var sumX = 0, sumY = 0, sumXY = 0, sumXX = 0;
-          for (var p = 0; p < nearZeroPoints.length; p++) { sumX += nearZeroPoints[p].x; sumY += nearZeroPoints[p].y; sumXY += (nearZeroPoints[p].x * nearZeroPoints[p].y); var varXX = (nearZeroPoints[p].x * nearZeroPoints[p].x); sumXX += varXX; }
+          for (var p = 0; p < nearZeroPoints.length; p++) { 
+            sumX += nearZeroPoints[p].x; 
+            sumY += nearZeroPoints[p].y; 
+            sumXY += (nearZeroPoints[p].x * nearZeroPoints[p].y); 
+            var varXX = (nearZeroPoints[p].x * nearZeroPoints[p].x); 
+            sumXX += varXX; 
+          }
           var denom = (nearZeroPoints.length * sumXX) - (sumX * sumX);
           var slope = denom == 0 ? 0 : ((nearZeroPoints.length * sumXY) - (sumX * sumY)) / denom;
           intervalMetrics.push({ speed: speedTarget, maxComp: maxComp, maxReb: maxReb, slope: slope, area: totalArea });
@@ -351,8 +384,8 @@ function processDynoFiles() {
           if (hMap.comp3 !== undefined) outputRowArray[hMap.comp3] = c3;
           if (hMap.reb3 !== undefined) outputRowArray[hMap.reb3] = r3;
         }
-        if (hMap.test1Status !== undefined) outputRowArray[hMap.test1Status] = "PASS";
-        if (hMap.test2Status !== undefined) outputRowArray[hMap.test2Status] = "PASS";
+        if (hMap.test1Status !== undefined) outputRowArray[hMap.test1Status] = "INITIALIZING";
+        if (hMap.test2Status !== undefined) outputRowArray[hMap.test2Status] = "INITIALIZING";
         if (hMap.overallStatus !== undefined) outputRowArray[hMap.overallStatus] = "PASS";
         
         var dynamicNextRowIndex = sheet.getLastRow() + 1;
@@ -376,7 +409,7 @@ function processDynoFiles() {
 }
 
 // =========================================================================
-// HISTORICAL RE-RUN ENGINE (STRICT SELF-HEALING UNIFIED SPC BALANCER)
+// HISTORICAL RE-RUN ENGINE (ADAPTIVE SPC, MEMORY BATCHING & RATCHET)
 // =========================================================================
 function retroactiveLogRecalculate() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -386,16 +419,30 @@ function retroactiveLogRecalculate() {
   if (!logSheet || !refSheet) return;
   
   var logRange = logSheet.getDataRange();
-  var logData = logRange.getValues(); if (logData.length < 2) return;
+  var logData = logRange.getValues(); 
+  if (logData.length < 2) return;
   var hMap = buildHeaderMap(logData[0]);
   var refData = refSheet.getDataRange().getValues();
   var mMap = buildMatrixHeaderMap(refData[0]);
   
-  var mean = function(arr) { var clean = arr.filter(function(x){return !isNaN(x);}); return clean.length === 0 ? 0 : clean.reduce(function(a,b){return a+b;},0)/clean.length; };
-  var sd = function(arr, m) { var clean = arr.filter(function(x){return !isNaN(x);}); return clean.length <= 1 ? 0 : Math.sqrt(clean.map(function(x){return Math.pow(x-m,2);}).reduce(function(a,b){return a+b;},0)/(clean.length - 1)); };
-  var cleanStr = function(s) { return String(s || "").trim().toLowerCase().replace(/[-_\s]/g, ""); };
+  var mean = function(arr) { 
+    var clean = arr.filter(function(x){ return !isNaN(x); }); 
+    return clean.length === 0 ? 0 : clean.reduce(function(a,b){ return a+b; },0)/clean.length; 
+  };
+  var sd = function(arr, m) { 
+    var clean = arr.filter(function(x){ return !isNaN(x); }); 
+    return clean.length <= 1 ? 0 : Math.sqrt(clean.map(function(x){ return Math.pow(x-m,2); }).reduce(function(a,b){ return a+b; },0)/(clean.length - 1)); 
+  };
+  var cleanStr = function(s) { 
+    return String(s || "").trim().toLowerCase().replace(/[-_\s]/g, ""); 
+  };
 
-  // STEP 0: Build Mapping Dictionary & Seed Matrix SOLELY from Program_Registry DYNAMIC_KEY
+  // Helper to safely write to the in-memory array
+  function setRefVal(mx, colKey, val) {
+    if (mMap[colKey] !== undefined) refData[mx][mMap[colKey]] = val;
+  }
+
+  // STEP 0: Build Mapping Dictionary & Seed Matrix
   var modelToDynamicKey = {};
   var existingMatrixKeys = {};
   for (var m = 1; m < refData.length; m++) {
@@ -420,8 +467,7 @@ function retroactiveLogRecalculate() {
       if (pnClean) modelToDynamicKey[pnClean] = targetKey;
 
       if (cleanTargetKey && !existingMatrixKeys[cleanTargetKey]) {
-        var newRefRow = [];
-        for (var colIdx = 0; colIdx < 42; colIdx++) newRefRow.push("");
+        var newRefRow = new Array(42).fill("");
         newRefRow[mMap.dynamicKey] = targetKey;
         rowsToAppend.push(newRefRow);
         existingMatrixKeys[cleanTargetKey] = refData.length + rowsToAppend.length;
@@ -430,353 +476,346 @@ function retroactiveLogRecalculate() {
   }
 
   if (rowsToAppend.length > 0) {
-    refSheet.getRange(refSheet.getLastRow() + 1, 1, rowsToAppend.length, 42).setValues(rowsToAppend);
-    SpreadsheetApp.flush();
-    refData = refSheet.getDataRange().getValues(); // Refresh cache
+    refData = refData.concat(rowsToAppend);
   }
 
-  // STEP 1: Direct Matrix-Driven Baseline Recalculation
+  // STEP 1: Progressive Staged Learning & Limit Refining (Memory Batched)
   for (var mx = 1; mx < refData.length; mx++) {
     var matrixKey = String(refData[mx][mMap.dynamicKey] || "").trim();
     if (!matrixKey) continue;
     var cMatrixKey = cleanStr(matrixKey);
-    var refRowIdx = mx + 1;
 
     var pool = [];
     for (var r = 1; r < logData.length; r++) {
       var logProg = String(logData[r][hMap.programName] || "").trim();
       var logBaseModel = String(logData[r][hMap.baseModel] || "").trim();
-      var cLogProg = cleanStr(logProg);
-      var cLogBase = cleanStr(logBaseModel);
+      var cResolvedKey = cleanStr(modelToDynamicKey[cleanStr(logBaseModel)] || modelToDynamicKey[cleanStr(logProg)] || logProg);
 
-      var resolvedKey = modelToDynamicKey[cLogBase] || modelToDynamicKey[cLogProg] || logProg;
-      var cResolvedKey = cleanStr(resolvedKey);
-
-      if (cResolvedKey === cMatrixKey || cLogProg === cMatrixKey || cLogBase === cMatrixKey) {
+      if (cResolvedKey === cMatrixKey || cleanStr(logProg) === cMatrixKey || cleanStr(logBaseModel) === cMatrixKey) {
         logData[r]._rowIdx = r + 1;
         pool.push(logData[r]);
       }
     }
-
     if (pool.length === 0) continue;
 
     var countN = pool.length;
     var row = refData[mx];
-    var c1MinRaw = row[mMap.c1Min];
-    var isSeeded = c1MinRaw !== "" && c1MinRaw !== null && c1MinRaw !== undefined && !isNaN(parseFloat(c1MinRaw));
+
+    // Filter training pool to valid passing runs (Exclude Prototypes and Failures)
+    var passPool = [];
+    for (var pIdx = 0; pIdx < pool.length; pIdx++) {
+      var pRow = pool[pIdx];
+      var pStat = String(pRow[hMap.overallStatus] || pRow[hMap.test1Status] || "").toUpperCase();
+      var pAction = String(pRow[hMap.evaluationAction] || "").toLowerCase();
+      var pSerial = String(pRow[hMap.trueSerial] || "").toLowerCase();
+
+      var isProto = pAction.includes("proto") || pAction.includes("not eval") || pStat.includes("PROTO") || pSerial.includes("proto") || pSerial.includes("dev");
+
+      if (!pStat.includes("FAIL") && !pAction.includes("teardown") && !pAction.includes("issue found") && !isProto) {
+        passPool.push(pRow);
+      }
+    }
+    var trainingPool = (passPool.length >= 3) ? passPool : pool;
+    if (trainingPool.length > 100) trainingPool = trainingPool.slice(-100);
 
     var c1Vals = [], r1Vals = [], c2Vals = [], r2Vals = [];
     var s1Vals = [], s2Vals = [], s3Vals = [];
     var sl1Vals = [], la1Vals = [], sl2Vals = [];
 
-    for (var s = 0; s < pool.length; s++) {
-      var d = pool[s];
-      c1Vals.push(parseFloat(d[hMap.comp1]) || 0);
+    for (var s = 0; s < trainingPool.length; s++) {
+      var d = trainingPool[s];
+      c1Vals.push(parseFloat(d[hMap.comp1]) || 0); 
       r1Vals.push(Math.abs(parseFloat(d[hMap.reb1])) || 0);
-      c2Vals.push(parseFloat(d[hMap.comp2]) || 0);
+      c2Vals.push(parseFloat(d[hMap.comp2]) || 0); 
       r2Vals.push(Math.abs(parseFloat(d[hMap.reb2])) || 0);
 
       if (!isNaN(parseFloat(d[hMap.slope1]))) sl1Vals.push(parseFloat(d[hMap.slope1]));
       if (!isNaN(parseFloat(d[hMap.loopArea1]))) la1Vals.push(parseFloat(d[hMap.loopArea1]));
       if (!isNaN(parseFloat(d[hMap.slope2]))) sl2Vals.push(parseFloat(d[hMap.slope2]));
 
-      var sp1 = snapToNominalSpeed(d[hMap.speed1]);
-      var sp2 = snapToNominalSpeed(d[hMap.speed2]);
+      var sp1 = snapToNominalSpeed(d[hMap.speed1]); 
+      var sp2 = snapToNominalSpeed(d[hMap.speed2]); 
       var sp3 = snapToNominalSpeed(d[hMap.speed3]);
-
-      if (sp1 > 0) s1Vals.push(sp1);
-      if (sp2 > 0) s2Vals.push(sp2);
+      if (sp1 > 0) s1Vals.push(sp1); 
+      if (sp2 > 0) s2Vals.push(sp2); 
       if (sp3 > 0) s3Vals.push(sp3);
     }
 
-    var rawSp1 = s1Vals.length > 0 ? mean(s1Vals) : 100;
-    var rawSp2 = s2Vals.length > 0 ? mean(s2Vals) : 400;
+    var rawSp1 = s1Vals.length > 0 ? mean(s1Vals) : 100; 
+    var rawSp2 = s2Vals.length > 0 ? mean(s2Vals) : 400; 
     var rawSp3 = s3Vals.length > 0 ? mean(s3Vals) : 1000;
-
-    var snappedSp1 = snapToNominalSpeed(rawSp1);
-    var snappedSp2 = snapToNominalSpeed(rawSp2);
+    var snappedSp1 = snapToNominalSpeed(rawSp1); 
+    var snappedSp2 = snapToNominalSpeed(rawSp2); 
     var snappedSp3 = snapToNominalSpeed(rawSp3);
 
-    if (snappedSp1 <= 100 || snappedSp3 <= 1000) {
-      snappedSp1 = 100; snappedSp2 = 400; snappedSp3 = 1000;
-    } else {
-      snappedSp1 = 500; snappedSp2 = 1000; snappedSp3 = 2500;
+    if (snappedSp1 <= 100 || snappedSp3 <= 1000) { 
+      snappedSp1 = 100; snappedSp2 = 400; snappedSp3 = 1000; 
+    } else { 
+      snappedSp1 = 500; snappedSp2 = 1000; snappedSp3 = 2500; 
     }
 
-    if (mMap.speed1 !== undefined) refSheet.getRange(refRowIdx, mMap.speed1 + 1).setValue(snappedSp1);
-    if (mMap.speed2 !== undefined) refSheet.getRange(refRowIdx, mMap.speed2 + 1).setValue(snappedSp2);
-    if (mMap.speed3 !== undefined) refSheet.getRange(refRowIdx, mMap.speed3 + 1).setValue(snappedSp3);
+    setRefVal(mx, 'speed1', snappedSp1); 
+    setRefVal(mx, 'speed2', snappedSp2); 
+    setRefVal(mx, 'speed3', snappedSp3);
 
-    for (var s = 0; s < pool.length; s++) {
-      var d = pool[s];
-      var rIdx = d._rowIdx;
-      if (rIdx) {
-        if (d[hMap.speed1] !== snappedSp1) logSheet.getRange(rIdx, hMap.speed1 + 1).setValue(snappedSp1);
-        if (d[hMap.speed2] !== snappedSp2) logSheet.getRange(rIdx, hMap.speed2 + 1).setValue(snappedSp2);
-        if (d[hMap.speed3] !== snappedSp3) logSheet.getRange(rIdx, hMap.speed3 + 1).setValue(snappedSp3);
-      }
-    }
-
-    var c1M = mean(c1Vals), c1S = sd(c1Vals, c1M);
+    var c1M = mean(c1Vals), c1S = sd(c1Vals, c1M); 
     var r1M = mean(r1Vals), r1S = sd(r1Vals, r1M);
-    var c2M = mean(c2Vals), c2S = sd(c2Vals, c2M);
+    var c2M = mean(c2Vals), c2S = sd(c2Vals, c2M); 
     var r2M = mean(r2Vals), r2S = sd(r2Vals, r2M);
 
-    if (!isSeeded) {
-      if (mMap.c1Mean !== undefined) refSheet.getRange(refRowIdx, mMap.c1Mean + 1).setValue(parseFloat(c1M.toFixed(1)));
-      if (mMap.c1SD !== undefined) refSheet.getRange(refRowIdx, mMap.c1SD + 1).setValue(parseFloat(c1S.toFixed(2)));
-      if (mMap.r1Mean !== undefined) refSheet.getRange(refRowIdx, mMap.r1Mean + 1).setValue(parseFloat(r1M.toFixed(1)));
-      if (mMap.r1SD !== undefined) refSheet.getRange(refRowIdx, mMap.r1SD + 1).setValue(parseFloat(r1S.toFixed(2)));
-      if (mMap.c2Mean !== undefined) refSheet.getRange(refRowIdx, mMap.c2Mean + 1).setValue(parseFloat(c2M.toFixed(1)));
-      if (mMap.c2SD !== undefined) refSheet.getRange(refRowIdx, mMap.c2SD + 1).setValue(parseFloat(c2S.toFixed(2)));
-      if (mMap.r2Mean !== undefined) refSheet.getRange(refRowIdx, mMap.r2Mean + 1).setValue(parseFloat(r2M.toFixed(1)));
-      if (mMap.r2SD !== undefined) refSheet.getRange(refRowIdx, mMap.r2SD + 1).setValue(parseFloat(r2S.toFixed(2)));
-      
-      if (countN > 2) {
-        // Enforce 68% Mean Floor Guardrail (allows ~6.0 force readings to pass while blocking sub-5.8 drops)
-        var c1MinCalc = Math.max(parseFloat((c1M * 0.68).toFixed(1)), parseFloat((c1M - 3*c1S).toFixed(1)));
-        var c1MaxCalc = parseFloat((c1M + 3*c1S).toFixed(1));
-        var r1MinCalc = Math.max(parseFloat((r1M * 0.68).toFixed(1)), parseFloat((r1M - 3*r1S).toFixed(1)));
-        var r1MaxCalc = parseFloat((r1M + 3*r1S).toFixed(1));
-
-        var c2MinCalc = Math.max(parseFloat((c2M * 0.68).toFixed(1)), parseFloat((c2M - 3*c2S).toFixed(1)));
-        var c2MaxCalc = parseFloat((c2M + 3*c2S).toFixed(1));
-        var r2MinCalc = Math.max(parseFloat((r2M * 0.68).toFixed(1)), parseFloat((r2M - 3*r2S).toFixed(1)));
-        var r2MaxCalc = parseFloat((r2M + 3*r2S).toFixed(1));
-
-        if (mMap.c1Min !== undefined) refSheet.getRange(refRowIdx, mMap.c1Min + 1).setValue(c1MinCalc);
-        if (mMap.c1Max !== undefined) refSheet.getRange(refRowIdx, mMap.c1Max + 1).setValue(c1MaxCalc);
-        if (mMap.r1Min !== undefined) refSheet.getRange(refRowIdx, mMap.r1Min + 1).setValue(r1MinCalc);
-        if (mMap.r1Max !== undefined) refSheet.getRange(refRowIdx, mMap.r1Max + 1).setValue(r1MaxCalc);
-
-        if (mMap.c2Min !== undefined) refSheet.getRange(refRowIdx, mMap.c2Min + 1).setValue(c2MinCalc);
-        if (mMap.c2Max !== undefined) refSheet.getRange(refRowIdx, mMap.c2Max + 1).setValue(c2MaxCalc);
-        if (mMap.r2Min !== undefined) refSheet.getRange(refRowIdx, mMap.r2Min + 1).setValue(r2MinCalc);
-        if (mMap.r2Max !== undefined) refSheet.getRange(refRowIdx, mMap.r2Max + 1).setValue(r2MaxCalc);
-      }
+    // Progressive SPC Stage Tightening
+    var stageNum = 1; 
+    var sigmaMult = 3.0; 
+    var pctCap = 0.15;
+    if (countN >= 100) { 
+      stageNum = 4; sigmaMult = 2.0; pctCap = 0.08; 
+    } else if (countN >= 40) { 
+      stageNum = 3; sigmaMult = 2.2; pctCap = 0.10; 
+    } else if (countN >= 15) { 
+      stageNum = 2; sigmaMult = 2.5; pctCap = 0.12; 
     }
 
-    if (sl1Vals.length > 0 && mMap.slope1Min !== undefined) refSheet.getRange(refRowIdx, mMap.slope1Min + 1).setValue(parseFloat(Math.min.apply(null, sl1Vals).toFixed(1)));
-    if (la1Vals.length > 0 && mMap.loopArea1Min !== undefined) refSheet.getRange(refRowIdx, mMap.loopArea1Min + 1).setValue(parseFloat(Math.min.apply(null, la1Vals).toFixed(1)));
-    if (sl2Vals.length > 0 && mMap.slope2Min !== undefined) refSheet.getRange(refRowIdx, mMap.slope2Min + 1).setValue(parseFloat(Math.min.apply(null, sl2Vals).toFixed(1)));
+    function calcAdaptiveLimits(meanVal, sdVal) {
+      var effSpread = (sdVal > 0) ? Math.min(sigmaMult * sdVal, meanVal * pctCap) : (meanVal * pctCap);
+      if (effSpread < meanVal * 0.03) effSpread = meanVal * 0.03; // 3% safety buffer
+      return { min: parseFloat((meanVal - effSpread).toFixed(1)), max: parseFloat((meanVal + effSpread).toFixed(1)) };
+    }
+
+    var ctrlModeRaw = String(row[mMap.controlMode] || "").toUpperCase();
+    var isManuallyLocked = ctrlModeRaw.includes("LOCK") || ctrlModeRaw.includes("MANUAL");
+
+    if (!isManuallyLocked && trainingPool.length >= 3) {
+      setRefVal(mx, 'c1Mean', parseFloat(c1M.toFixed(1))); 
+      setRefVal(mx, 'c1SD', parseFloat(c1S.toFixed(2)));
+      setRefVal(mx, 'r1Mean', parseFloat(r1M.toFixed(1))); 
+      setRefVal(mx, 'r1SD', parseFloat(r1S.toFixed(2)));
+      setRefVal(mx, 'c2Mean', parseFloat(c2M.toFixed(1))); 
+      setRefVal(mx, 'c2SD', parseFloat(c2S.toFixed(2)));
+      setRefVal(mx, 'r2Mean', parseFloat(r2M.toFixed(1))); 
+      setRefVal(mx, 'r2SD', parseFloat(r2S.toFixed(2)));
+
+      var lC1 = calcAdaptiveLimits(c1M, c1S); 
+      var lR1 = calcAdaptiveLimits(r1M, r1S);
+      var lC2 = calcAdaptiveLimits(c2M, c2S); 
+      var lR2 = calcAdaptiveLimits(r2M, r2S);
+
+      setRefVal(mx, 'c1Min', lC1.min); setRefVal(mx, 'c1Max', lC1.max);
+      setRefVal(mx, 'r1Min', lR1.min); setRefVal(mx, 'r1Max', lR1.max);
+      setRefVal(mx, 'c2Min', lC2.min); setRefVal(mx, 'c2Max', lC2.max);
+      setRefVal(mx, 'r2Min', lR2.min); setRefVal(mx, 'r2Max', lR2.max);
+    }
+
+    if (sl1Vals.length > 0) setRefVal(mx, 'slope1Min', parseFloat(Math.min.apply(null, sl1Vals).toFixed(1)));
+    if (la1Vals.length > 0) setRefVal(mx, 'loopArea1Min', parseFloat(Math.min.apply(null, la1Vals).toFixed(1)));
+    if (sl2Vals.length > 0) setRefVal(mx, 'slope2Min', parseFloat(Math.min.apply(null, sl2Vals).toFixed(1)));
 
     var origComp = parseFloat(row[mMap.origCompBase]);
-    if (isNaN(origComp) || origComp === 0) {
-      origComp = c1M;
-      if (mMap.origCompBase !== undefined) refSheet.getRange(refRowIdx, mMap.origCompBase + 1).setValue(parseFloat(origComp.toFixed(1)));
+    if (isNaN(origComp) || origComp === 0) { 
+      origComp = c1M; 
+      setRefVal(mx, 'origCompBase', parseFloat(origComp.toFixed(1))); 
     }
-
     var origReb = parseFloat(row[mMap.origRebBase]);
-    if (isNaN(origReb) || origReb === 0) {
-      origReb = r1M;
-      if (mMap.origRebBase !== undefined) refSheet.getRange(refRowIdx, mMap.origRebBase + 1).setValue(parseFloat(origReb.toFixed(1)));
+    if (isNaN(origReb) || origReb === 0) { 
+      origReb = r1M; 
+      setRefVal(mx, 'origRebBase', parseFloat(origReb.toFixed(1))); 
     }
 
-    if (mMap.rawCompSD !== undefined) refSheet.getRange(refRowIdx, mMap.rawCompSD + 1).setValue(parseFloat(c1S.toFixed(2)));
-    if (mMap.rawRebSD !== undefined) refSheet.getRange(refRowIdx, mMap.rawRebSD + 1).setValue(parseFloat(r1S.toFixed(2)));
+    setRefVal(mx, 'rawCompSD', parseFloat(c1S.toFixed(2))); 
+    setRefVal(mx, 'rawRebSD', parseFloat(r1S.toFixed(2)));
 
-    var cMin = parseFloat(row[mMap.c1Min]), cMax = parseFloat(row[mMap.c1Max]);
-    var rMin = parseFloat(row[mMap.r1Min]), rMax = parseFloat(row[mMap.r1Max]);
-    var cWidth = (!isNaN(cMin) && !isNaN(cMax)) ? (cMax - cMin) : (6 * c1S);
-    var rWidth = (!isNaN(rMin) && !isNaN(rMax)) ? (rMax - rMin) : (6 * r1S);
+    var cWidth = (!isNaN(refData[mx][mMap.c1Max]) && !isNaN(refData[mx][mMap.c1Min])) ? (refData[mx][mMap.c1Max] - refData[mx][mMap.c1Min]) : (6 * c1S);
+    var rWidth = (!isNaN(refData[mx][mMap.r1Max]) && !isNaN(refData[mx][mMap.r1Min])) ? (refData[mx][mMap.r1Max] - refData[mx][mMap.r1Min]) : (6 * r1S);
+    setRefVal(mx, 'compRangeWidth', parseFloat(cWidth.toFixed(1))); 
+    setRefVal(mx, 'rebRangeWidth', parseFloat(rWidth.toFixed(1)));
 
-    if (mMap.compRangeWidth !== undefined) refSheet.getRange(refRowIdx, mMap.compRangeWidth + 1).setValue(parseFloat(cWidth.toFixed(1)));
-    if (mMap.rebRangeWidth !== undefined) refSheet.getRange(refRowIdx, mMap.rebRangeWidth + 1).setValue(parseFloat(rWidth.toFixed(1)));
-
-    var compDrift = origComp !== 0 ? (((c1M - origComp) / origComp) * 100) : 0;
-    var rebDrift  = origReb !== 0 ? (((r1M - origReb) / origReb) * 100) : 0;
-
-    if (mMap.compDriftPct !== undefined) refSheet.getRange(refRowIdx, mMap.compDriftPct + 1).setValue(parseFloat(compDrift.toFixed(2)));
-    if (mMap.rebDriftPct !== undefined) refSheet.getRange(refRowIdx, mMap.rebDriftPct + 1).setValue(parseFloat(rebDrift.toFixed(2)));
+    var compDrift = (origComp !== 0 && !isNaN(origComp)) ? (((c1M - origComp) / origComp) * 100) : 0;
+    var rebDrift  = (origReb !== 0 && !isNaN(origReb)) ? (((r1M - origReb) / origReb) * 100) : 0;
+    setRefVal(mx, 'compDriftPct', parseFloat(compDrift.toFixed(2))); 
+    setRefVal(mx, 'rebDriftPct', parseFloat(rebDrift.toFixed(2)));
 
     var maxDrift = Math.max(Math.abs(compDrift), Math.abs(rebDrift));
     var procHealth = "";
-    if (maxDrift > 10) {
-      procHealth = "🔴 WARNING: UNACCEPTABLE DRIFT (" + maxDrift.toFixed(1) + "%)";
-    } else if (isSeeded) {
-      procHealth = "🟢 Stage 0: SEEDED BLUEPRINT ACTIVE (3σ)";
-    } else if (countN >= 100) {
-      procHealth = "🟢 Stage 4: MATURE SPC LOCKED (3σ)";
+    if (maxDrift >= 8) {
+      procHealth = "🔴 CRITICAL DRIFT (" + (Math.abs(rebDrift) >= Math.abs(compDrift) ? "Reb" : "Comp") + " vs Origin)";
+    } else if (maxDrift >= 4) {
+      procHealth = "🟡 MODERATE DRIFT (" + (Math.abs(rebDrift) >= Math.abs(compDrift) ? "Reb" : "Comp") + " vs Origin)";
     } else {
-      procHealth = "🟡 Stage 1: BUILDING BASELINE (" + countN + " samples)";
+      procHealth = "🟢 STABLE (" + maxDrift.toFixed(1) + "% drift)";
     }
-    if (mMap.healthStamp !== undefined) refSheet.getRange(refRowIdx, mMap.healthStamp + 1).setValue(procHealth);
-
-    var controlModeText = "MANUAL GRACE LIMITS LOADED";
-    if (countN >= 10 && !isSeeded) {
-      controlModeText = "AUTOMATED STATISTICAL SPC LAYER ACTIVE";
-    } else if (countN >= 10 && isSeeded) {
-      controlModeText = "HYBRID: SEEDED BLUEPRINT WITH ACTIVE SPC";
-    }
-    if (mMap.controlMode !== undefined) refSheet.getRange(refRowIdx, mMap.controlMode + 1).setValue(controlModeText);
-
-    if (mMap.sampleCount !== undefined) refSheet.getRange(refRowIdx, mMap.sampleCount + 1).setValue(countN);
+    
+    setRefVal(mx, 'healthStamp', procHealth);
+    setRefVal(mx, 'controlMode', isManuallyLocked ? "MANUAL LOCKED SPEC" : ("ADAPTIVE SPC (Stage " + stageNum + " | " + sigmaMult + "σ | N=" + countN + ")"));
+    setRefVal(mx, 'sampleCount', countN);
   }
 
-  // STEP 2: Compute Batch Math Limits across cohorts
+  // MASS BATCH WRITE
+  refSheet.getRange(1, 1, refData.length, refData[0].length).setValues(refData);
+
+  // STEP 2: Compute Batch Statistics
   var batchGroups = {};
   for (var r = 1; r < logData.length; r++) {
     var serial = String(logData[r][hMap.trueSerial] || "").trim();
     if (serial !== "") {
       var batchId = serial.split("-")[0].trim();
-      if (!batchGroups[batchId]) {
-        batchGroups[batchId] = { c1: [], r1: [], c2: [], r2: [], rf: [], rowReferences: [] };
-      }
+      if (!batchGroups[batchId]) batchGroups[batchId] = { c1: [], r1: [], c2: [], r2: [], rf: [] };
       batchGroups[batchId].c1.push(parseFloat(logData[r][hMap.comp1]) || 0);
       batchGroups[batchId].r1.push(Math.abs(parseFloat(logData[r][hMap.reb1])) || 0);
       batchGroups[batchId].c2.push(parseFloat(logData[r][hMap.comp2]) || 0);
       batchGroups[batchId].r2.push(Math.abs(parseFloat(logData[r][hMap.reb2])) || 0);
       batchGroups[batchId].rf.push(parseFloat(logData[r][hMap.rodForce]) || 0);
-      batchGroups[batchId].rowReferences.push(r);
     }
   }
 
   var batchStats = {};
   for (var bId in batchGroups) {
     var b = batchGroups[bId];
-    var mC1 = mean(b.c1), sC1 = sd(b.c1, mC1);
-    var mR1 = mean(b.r1), sR1 = sd(b.r1, mR1);
-    var mC2 = mean(b.c2), sC2 = sd(b.c2, mC2);
+    var mC1 = mean(b.c1), sC1 = sd(b.c1, mC1); 
+    var mR1 = mean(b.r1), sR1 = sd(b.r1, mR1); 
+    var mC2 = mean(b.c2), sC2 = sd(b.c2, mC2); 
     var mR2 = mean(b.r2), sR2 = sd(b.r2, mR2);
     var mRF = mean(b.rf), sRF = sd(b.rf, mRF);
-    
     batchStats[bId] = {
-      c1Min: mC1 - 2*sC1, c1Max: mC1 + 2*sC1,
+      c1Mean: mC1, r1Mean: mR1, c2Mean: mC2, r2Mean: mR2,
+      c1Min: mC1 - 2*sC1, c1Max: mC1 + 2*sC1, 
       r1Min: mR1 - 2*sR1, r1Max: mR1 + 2*sR1,
-      c2Min: mC2 - 2*sC2, c2Max: mC2 + 2*sC2,
+      c2Min: mC2 - 2*sC2, c2Max: mC2 + 2*sC2, 
       r2Min: mR2 - 2*sR2, r2Max: mR2 + 2*sR2,
       rfMin: mRF - 2*sRF, count: b.c1.length
     };
   }
 
-  // STEP 3: Multi-Gate Quality Diagnostics for Master_Dyno_Log
-  refData = refSheet.getDataRange().getValues();
-  mMap = buildMatrixHeaderMap(refData[0]);
-
+  // STEP 3: Quality Diagnostics (with Prototype Router & Historical Ratchet)
   var qualityOutputSubMatrix = [];
   for (var r = 1; r < logData.length; r++) {
     var pName = String(logData[r][hMap.programName] || "").trim();
     var serial = String(logData[r][hMap.trueSerial] || "").trim();
     var baseModel = String(logData[r][hMap.baseModel] || "").trim();
-    var cleanPName = cleanStr(pName);
-    var cleanBaseModel = cleanStr(baseModel);
     var batchId = serial.split("-")[0].trim();
     
-    var test1Result = "INITIALIZING"; var test2Result = "INITIALIZING"; var finalStatus = "PASS";
+    var test1Result = "INITIALIZING"; 
+    var test2Result = "INITIALIZING"; 
+    var finalStatus = "PASS";
     var failTags = [];
-    
     var evalAction = String(logData[r][hMap.evaluationAction] || "").trim();
+    var evalLower = evalAction.toLowerCase();
+
+    var prevT1 = String(logData[r][hMap.test1Status] || "").trim().toUpperCase();
+    var prevOverall = String(logData[r][hMap.overallStatus] || "").trim().toUpperCase();
+    var wasCertifiedPass = prevOverall.includes("PASS") || prevT1.includes("PASS");
+    var hasExplicitAction = evalLower.includes("teardown") || evalLower.includes("retest") || evalLower.includes("issue found");
     
+    var isProtoRow = evalLower.includes("prototype") || evalLower.includes("not evaluated") || evalLower.includes("dev") || serial.toLowerCase().includes("proto") || serial.toLowerCase().includes("dev");
+
     if (pName) {
-      var resolvedDynamicKey = modelToDynamicKey[cleanBaseModel] || modelToDynamicKey[cleanPName] || pName;
-      var cleanResolvedKey = cleanStr(resolvedDynamicKey);
-      
+      var resolvedKey = cleanStr(modelToDynamicKey[cleanStr(baseModel)] || modelToDynamicKey[cleanStr(pName)] || pName);
       var refRow = null;
       for (var mx = 1; mx < refData.length; mx++) {
         var mKey = cleanStr(refData[mx][mMap.dynamicKey]);
-        if (mKey && (mKey === cleanResolvedKey || cleanResolvedKey.indexOf(mKey) !== -1 || mKey.indexOf(cleanResolvedKey) !== -1)) {
-          refRow = refData[mx]; break;
-        }
+        if (mKey && (mKey === resolvedKey || resolvedKey.indexOf(mKey) !== -1)) { refRow = refData[mx]; break; }
       }
       
-      var lowC = parseFloat(logData[r][hMap.comp1]) || 0; var lowR = Math.abs(parseFloat(logData[r][hMap.reb1])) || 0;
-      var midC = parseFloat(logData[r][hMap.comp2]) || 0; var midR = Math.abs(parseFloat(logData[r][hMap.reb2])) || 0;
-      var sl1  = parseFloat(logData[r][hMap.slope1]) || 0; var individualRF = parseFloat(logData[r][hMap.rodForce]) || 0;
+      var lowC = parseFloat(logData[r][hMap.comp1]) || 0; 
+      var lowR = Math.abs(parseFloat(logData[r][hMap.reb1])) || 0;
+      var midC = parseFloat(logData[r][hMap.comp2]) || 0; 
+      var midR = Math.abs(parseFloat(logData[r][hMap.reb2])) || 0;
+      var sl1  = parseFloat(logData[r][hMap.slope1]) || 0; 
+      var individualRF = parseFloat(logData[r][hMap.rodForce]) || 0;
       
-      // Global Limit Check Tagging (Test 1)
+      var legacyTightenedVariance = false;
+
       if (refRow) {
         var t1Pass = true;
-        var valC1Min = parseFloat(refRow[mMap.c1Min]); var valC1Max = parseFloat(refRow[mMap.c1Max]);
-        var valR1Min = parseFloat(refRow[mMap.r1Min]); var valR1Max = parseFloat(refRow[mMap.r1Max]);
-        var valC2Min = parseFloat(refRow[mMap.c2Min]); var valC2Max = parseFloat(refRow[mMap.c2Max]);
-        var valR2Min = parseFloat(refRow[mMap.r2Min]); var valR2Max = parseFloat(refRow[mMap.r2Max]);
-        var slope1Min = parseFloat(refRow[mMap.slope1Min]) || 0;
-        
-        if (!isNaN(valC1Min)) {
-          if (lowC < valC1Min || lowC > valC1Max) { t1Pass = false; failTags.push("[C1_FAIL]"); }
-          if (lowR < valR1Min || lowR > valR1Max) { t1Pass = false; failTags.push("[R1_FAIL]"); }
-          if (midC < valC2Min || midC > valC2Max) { t1Pass = false; failTags.push("[C2_FAIL]"); }
-          if (midR < valR2Min || midR > valR2Max) { t1Pass = false; failTags.push("[R2_FAIL]"); }
-          if (sl1 < slope1Min) { t1Pass = false; failTags.push("[SLOPE_FAIL]"); }
+        if (lowC < parseFloat(refRow[mMap.c1Min]) || lowC > parseFloat(refRow[mMap.c1Max])) { t1Pass = false; failTags.push("[C1_FAIL]"); }
+        if (lowR < parseFloat(refRow[mMap.r1Min]) || lowR > parseFloat(refRow[mMap.r1Max])) { t1Pass = false; failTags.push("[R1_FAIL]"); }
+        if (midC < parseFloat(refRow[mMap.c2Min]) || midC > parseFloat(refRow[mMap.c2Max])) { t1Pass = false; failTags.push("[C2_FAIL]"); }
+        if (midR < parseFloat(refRow[mMap.r2Min]) || midR > parseFloat(refRow[mMap.r2Max])) { t1Pass = false; failTags.push("[R2_FAIL]"); }
+        if (sl1 < (parseFloat(refRow[mMap.slope1Min]) || 0)) { t1Pass = false; failTags.push("[SLOPE_FAIL]"); }
+
+        // HISTORICAL INTEGRITY RATCHET
+        if (!t1Pass && wasCertifiedPass && !hasExplicitAction && !isProtoRow) {
+          t1Pass = true;
+          test1Result = prevT1.includes("OVERRIDE") ? "PASS (OVERRIDE)" : "PASS";
+          failTags = []; 
+          legacyTightenedVariance = true;
+        } else if (!isProtoRow) {
+          test1Result = t1Pass ? "PASS" : "FAIL (BLUEPRINT)";
         }
-        test1Result = t1Pass ? "PASS" : "FAIL (BLUEPRINT)";
       }
       
-      // Cohort Outlier Check Tagging (Test 2)
       var cStat = batchStats[batchId];
       var defectAnalysis = "";
-      if (cStat && cStat.count > 2) {
+      if (cStat && cStat.count > 2 && !isProtoRow) {
         var t2Pass = true;
         var lowGasPressure = (individualRF < cStat.rfMin);
         var lowC1 = (lowC < cStat.c1Min || lowC > cStat.c1Max);
         var lowR1 = (lowR < cStat.r1Min || lowR > cStat.r1Max);
-        var lowC2 = (midC < cStat.c2Min || midC > cStat.c2Max);
-        var lowR2 = (midR < cStat.r2Min || midR > cStat.r2Max);
         
         if (lowGasPressure) { t2Pass = false; failTags.push("[RF_FAIL]"); }
         if (lowC1) { t2Pass = false; failTags.push("[C1_FAIL]"); }
         if (lowR1) { t2Pass = false; failTags.push("[R1_FAIL]"); }
-        if (lowC2) { t2Pass = false; failTags.push("[C2_FAIL]"); }
-        if (lowR2) { t2Pass = false; failTags.push("[R2_FAIL]"); }
         
         if (!t2Pass) {
           if (lowGasPressure) defectAnalysis = "Gas Pressure Deficient.";
           else if (lowC1 && lowR1) defectAnalysis = "Symmetric drop. Potential bypass.";
-          else if (lowC1) defectAnalysis = "Compression outlier variation.";
-          else if (lowR1) defectAnalysis = "Rebound outlier variation.";
           else defectAnalysis = "Outlier variance detected.";
         }
         test2Result = t2Pass ? "PASS" : "FAIL (OUTLIER)";
       }
       
+      var batchDriftTag = "";
+      if (refRow && cStat && cStat.count >= 3 && !isProtoRow) {
+        var masterR1Mean = parseFloat(refRow[mMap.r1Mean]);
+        if (!isNaN(masterR1Mean) && masterR1Mean > 0) {
+          var bRebDrift = ((cStat.r1Mean - masterR1Mean) / masterR1Mean) * 100;
+          if (Math.abs(bRebDrift) >= 5) batchDriftTag = "[BATCH_DRIFT_REB " + (bRebDrift > 0 ? "+" : "") + bRebDrift.toFixed(1) + "%]";
+        }
+      }
+
       var uniqueFailTags = [];
       for (var f = 0; f < failTags.length; f++) {
         if (uniqueFailTags.indexOf(failTags[f]) === -1) uniqueFailTags.push(failTags[f]);
       }
       
-      var evalLower = evalAction.toLowerCase().trim();
       var globalPass = (test1Result === "INITIALIZING" || !test1Result.includes("FAIL")) && (test2Result === "INITIALIZING" || !test2Result.includes("FAIL"));
-      var diagnosticNotes = globalPass ? "✅ SHOCK IS WITHIN TOLERANCE." : "❌ ERROR: " + uniqueFailTags.join(" ") + " | " + defectAnalysis;
+      var diagnosticNotes = "";
 
-      if (evalLower.indexOf("override test 1") !== -1) {
-        test1Result = "PASS (OVERRIDE)";
-        var t2Passing = (test2Result.indexOf("PASS") !== -1);
-        if (t2Passing) {
-          finalStatus = "PASS (OVERRIDE)";
-          diagnosticNotes = "⚠️ MANUAL OVERRIDE: Authorized via Engineering Action.";
-        } else {
-          finalStatus = "FAIL";
-          diagnosticNotes = "⚠️ TEST 1 OVERRIDDEN | Test 2 Failure: " + uniqueFailTags.join(" ");
-        }
+      if (globalPass) {
+        if (legacyTightenedVariance) diagnosticNotes = "✅ PASS (Legacy Baseline) | [LEGACY_PASS: Outside Refined Spec]";
+        else if (batchDriftTag) diagnosticNotes = "✅ SHOCK IS WITHIN TOLERANCE. ⚠️ Notice: " + batchDriftTag;
+        else diagnosticNotes = "✅ SHOCK IS WITHIN TOLERANCE.";
+      } else {
+        diagnosticNotes = "❌ ERROR: " + uniqueFailTags.join(" ") + " | " + defectAnalysis;
+      }
+
+      if (isProtoRow) {
+        test1Result = "NOT EVALUATED"; 
+        test2Result = "NOT EVALUATED"; 
+        finalStatus = "PROTOTYPE";
+        diagnosticNotes = "🔬 PROTOTYPE / R&D: Logged for development; excluded from production SPC.";
+      } else if (evalLower.indexOf("override test 1") !== -1) {
+        test1Result = "PASS (OVERRIDE)"; 
+        finalStatus = (test2Result.indexOf("PASS") !== -1) ? "PASS (OVERRIDE)" : "FAIL";
+        diagnosticNotes = (finalStatus === "FAIL") ? "⚠️ TEST 1 OVERRIDDEN | Test 2 Failure: " + uniqueFailTags.join(" ") : "⚠️ MANUAL OVERRIDE";
       } else if (evalLower.indexOf("override test 2") !== -1) {
-        test2Result = "PASS (OVERRIDE)";
-        var t1Passing = (test1Result.indexOf("PASS") !== -1);
-        if (t1Passing) {
-          finalStatus = "PASS (OVERRIDE)";
-          diagnosticNotes = "⚠️ MANUAL OVERRIDE: Authorized via Engineering Action.";
-        } else {
-          finalStatus = "FAIL";
-          diagnosticNotes = "⚠️ TEST 2 OVERRIDDEN | Test 1 Failure: " + uniqueFailTags.join(" ");
-        }
-      } else if (evalLower.indexOf("override all") !== -1 || evalLower.indexOf("override both") !== -1) {
-        test1Result = "PASS (OVERRIDE)";
-        test2Result = "PASS (OVERRIDE)";
-        finalStatus = "PASS (OVERRIDE)";
-        diagnosticNotes = "⚠️ MANUAL OVERRIDE: Authorized via Engineering Action.";
-      } else if (evalLower.indexOf("retest required") !== -1 || evalLower === "retest") {
-        finalStatus = "HOLD (RETEST REQUIRED)";
-        diagnosticNotes = "⏳ RETEST REQUIRED: Operator to re-run shock on dyno.";
-      } else if (evalLower.indexOf("teardown required") !== -1 || evalLower === "teardown") {
-        finalStatus = "HOLD (TEARDOWN REQUIRED)";
-        diagnosticNotes = "🔧 TEARDOWN REQUIRED: Inspect internal assembly & valving.";
-      } else if (evalLower.indexOf("no issue found") !== -1 || evalLower.indexOf("no issue") !== -1) {
-        test1Result = "PASS";
-        test2Result = "PASS";
-        finalStatus = "PASS";
-        diagnosticNotes = "🛠️ TEARDOWN VALIDATED: Assembly clear.";
-      } else if (evalLower.indexOf("issue found") !== -1) {
-        finalStatus = "FAIL";
-        diagnosticNotes = "❌ ISSUE CONFIRMED: See Engineering Comments.";
+        test2Result = "PASS (OVERRIDE)"; 
+        finalStatus = (test1Result.indexOf("PASS") !== -1) ? "PASS (OVERRIDE)" : "FAIL";
+        diagnosticNotes = (finalStatus === "FAIL") ? "⚠️ TEST 2 OVERRIDDEN | Test 1 Failure: " + uniqueFailTags.join(" ") : "⚠️ MANUAL OVERRIDE";
+      } else if (evalLower.indexOf("override all") !== -1) {
+        test1Result = "PASS (OVERRIDE)"; 
+        test2Result = "PASS (OVERRIDE)"; 
+        finalStatus = "PASS (OVERRIDE)"; 
+        diagnosticNotes = "⚠️ MANUAL OVERRIDE";
+      } else if (evalLower.indexOf("retest") !== -1) {
+        finalStatus = "HOLD (RETEST REQUIRED)"; 
+        diagnosticNotes = "⏳ RETEST REQUIRED.";
+      } else if (evalLower.indexOf("teardown") !== -1) {
+        finalStatus = "HOLD (TEARDOWN REQUIRED)"; 
+        diagnosticNotes = "🔧 TEARDOWN REQUIRED.";
+      } else if (evalLower.indexOf("no issue") !== -1) {
+        test1Result = "PASS"; 
+        test2Result = "PASS"; 
+        finalStatus = "PASS"; 
+        diagnosticNotes = "🛠️ TEARDOWN VALIDATED.";
       } else if (!globalPass) {
         finalStatus = "FAIL";
       }

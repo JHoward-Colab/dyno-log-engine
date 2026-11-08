@@ -25,6 +25,15 @@ function clickMasterSyncButton() {
     if (ui) ui.alert("⚠️ Recalculation Warning", "Retroactive Recalculate Error: " + e.message, ui.ButtonSet.OK);
   }
 
+  // Auto-refresh Summary Dashboard
+  try {
+    if (typeof runFullSystemIndexer === "function") {
+      runFullSystemIndexer();
+    }
+  } catch(e) {
+    Logger.log("Summary Indexer Notice: " + e.toString());
+  }
+
   try {
     var sheet = ss.getSheetByName(CONFIG.SHEET_NAMES.OPERATOR_STATION);
     if (sheet) {
@@ -76,17 +85,15 @@ function formatShortSerial(rawSerial, searchBarcode) {
 }
 
 /**
- * Robust Serial Matcher between Work Order barcodes (e.g. 43081008001979001) and Dyno Log serials (e.g. 001979-001).
+ * Robust Serial Matcher between Work Order barcodes and Dyno Log serials.
  */
 function isSerialMatch(expSerial, logSerial, searchBarcode) {
   if (!expSerial || !logSerial) return false;
 
-  // 1. Primary Match: Compare standardized short serials (e.g. "002435-001" === "002435-001")
   var sExp = formatShortSerial(expSerial, searchBarcode);
   var sLog = formatShortSerial(logSerial, searchBarcode);
   if (sExp && sLog && sExp.toLowerCase() === sLog.toLowerCase()) return true;
 
-  // 2. Fallback: Clean key exact / end match
   var cExp = cleanKey(expSerial);
   var cLog = cleanKey(logSerial);
   if (!cExp || !cLog) return false;
@@ -98,11 +105,14 @@ function isSerialMatch(expSerial, logSerial, searchBarcode) {
   var cExpNoZero = cExp.replace(/^0+/, "");
   if (cExp.endsWith(cLogNoZero) || cLog.endsWith(cExpNoZero)) return true;
 
-  // 3. Fallback: Unit number match (last 3 digits)
-  if (cExp.length >= 3 && cLog.length >= 3) {
+  // Exact Unit Match constrained by batch prefix
+  if (cExp.length >= 6 && cLog.length >= 3) {
     var expUnit = cExp.slice(-3);
     var logUnit = cLog.slice(-3);
-    if (expUnit === logUnit) return true;
+    if (expUnit === logUnit) {
+      var logBatch = cLog.slice(0, -3).replace(/^0+/, "");
+      if (logBatch && cExp.indexOf(logBatch) !== -1) return true;
+    }
   }
 
   return false;
@@ -170,7 +180,6 @@ function manageOperatorStation(e) {
       
     var searchCriteria = "title contains '" + searchBarcode + "' and (mimeType = 'application/vnd.google-apps.spreadsheet' or mimeType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet') and trashed = false";  
     
-    // Scoped search inside Work Order folder first
     var folder = null;
     try {
       if (CONFIG.FOLDERS && CONFIG.FOLDERS.WORK_ORDER_FOLDER_ID) {
@@ -250,28 +259,27 @@ function manageOperatorStation(e) {
 
           var currentScore = 0;
 
-         // STRICT MATCH HIERARCHY
+          // STRICT MATCH HIERARCHY
           if (cleanBase && cleanBase === cleanWoPart) {
-            currentScore = 10; // Highest Priority: Exact match on Base Model
+            currentScore = 10;
           } else if (cleanDynKey && cleanDynKey === cleanWoPart) {
-            currentScore = 9;  // Exact match on Dynamic Key
+            currentScore = 9;
           } else if (cleanProgName && cleanProgName === cleanWoPart) {
-            currentScore = 8;  // Exact match on Program Name
+            currentScore = 8;
           } else if (cleanDynKey && cleanWoPart.indexOf(cleanDynKey) !== -1) {
-            currentScore = 5;  // Partial match on Dynamic Key
+            currentScore = 5;
           } else if (cleanProgName && cleanWoPart.indexOf(cleanProgName) !== -1) {
-            currentScore = 4;  // Partial match on Program Name
+            currentScore = 4;
           } else if (cleanBase && cleanWoPart.indexOf(cleanBase) !== -1) {
-            currentScore = 3;  // Partial match on Base Model (e.g. WO contains Base)
+            currentScore = 3;
           }
 
           // BOM REVISION TIE-BREAKER
           var regBomRev = String(regRow[regCols.BOM_REV - 1] || "").trim();
           if (currentScore > 0 && regBomRev && cleanKey(regBomRev) === cleanKey(woBomRevision)) {
-            currentScore += 5; // Boosts score (e.g., 10 -> 15) for matching BOM Rev
+            currentScore += 5;
           }
 
-          // Strict > keeps the best exact match from being overwritten unless higher score
           if (currentScore > 0 && currentScore > highestMatchScore) {
             highestMatchScore = currentScore;
             bestMatchRow = regRow;
@@ -533,35 +541,31 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber,
       if (t2Status.toUpperCase().includes("FAIL")) test2FailCount++;
 
       var mappedRow = [
-        serialHyperlinkFormula,                           // Col A (1): Standardized Short Serial
-        safeAbsNum(getLogVal(row, logCols.ROD_FORCE, 5)), // Col B (2): Rod Force
-        safeAbsNum(getLogVal(row, logCols.COMP_1, 7)),    // Col C (3): Low Speed Comp
-        safeAbsNum(getLogVal(row, logCols.REB_1, 8)),     // Col D (4): Low Speed Reb
-        safeAbsNum(getLogVal(row, logCols.COMP_2, 12)),   // Col E (5): Med Speed Comp
-        safeAbsNum(getLogVal(row, logCols.REB_2, 13)),    // Col F (6): Med Speed Reb
-        t1Status,                                         // Col G (7): Test 1 Status
-        t2Status,                                         // Col H (8): Test 2 Status
-        overallStat,                                      // Col I (9): Overall Status
-        evalAction,                                       // Col J (10): Evaluation Action
-        diagnostics,                                      // Col K (11): Diagnostics
-        engComm                                           // Col L (12): Engineering Comments
+        serialHyperlinkFormula,                           
+        safeAbsNum(getLogVal(row, logCols.ROD_FORCE, 5)), 
+        safeAbsNum(getLogVal(row, logCols.COMP_1, 7)),    
+        safeAbsNum(getLogVal(row, logCols.REB_1, 8)),     
+        safeAbsNum(getLogVal(row, logCols.COMP_2, 12)),   
+        safeAbsNum(getLogVal(row, logCols.REB_2, 13)),    
+        t1Status,                                         
+        t2Status,                                         
+        overallStat,                                      
+        evalAction,                                       
+        diagnostics,                                      
+        engComm                                           
       ];
       rowsToDisplay.push(mappedRow);
     } else {
       untestedCount++;
       var mappedRow = [
-        displaySerial,                                    // Col A (1): Standardized Short Serial
-        "",                                               // Col B (2): Rod Force
-        "",                                               // Col C (3): Low Speed Comp
-        "",                                               // Col D (4): Low Speed Reb
-        "",                                               // Col E (5): Med Speed Comp
-        "",                                               // Col F (6): Med Speed Reb
-        "NOT TESTED YET",                                 // Col G (7): Test 1 Status
-        "NOT TESTED YET",                                 // Col H (8): Test 2 Status
-        "NOT TESTED YET",                                 // Col I (9): Overall Status
-        "",                                               // Col J (10): Evaluation Action
-        "⏳ Unit pending dyno test.",                     // Col K (11): Diagnostics
-        ""                                                // Col L (12): Engineering Comments
+        displaySerial,                                    
+        "", "", "", "", "",                               
+        "NOT TESTED YET",                                 
+        "NOT TESTED YET",                                 
+        "NOT TESTED YET",                                 
+        "",                                               
+        "⏳ Unit pending dyno test.",                     
+        ""                                                
       ];
       rowsToDisplay.push(mappedRow);
     }
@@ -613,14 +617,18 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber,
     var overallStatStr = String(rowData[8] || "").toUpperCase();
     var diagnosticsStr = String(rowData[10] || "");
 
+    var isProto = overallStatStr.includes("PROTOTYPE") || overallStatStr.includes("NOT EVALUATED");
+
     var applyRedHighlight = function(colIndex) {
-      rowBg[colIndex] = "#FADBD8";   
-      rowFont[colIndex] = "#C0392B"; 
-      rowWeight[colIndex] = "bold";
+      if (!isProto) {
+        rowBg[colIndex] = "#FADBD8";   
+        rowFont[colIndex] = "#C0392B"; 
+        rowWeight[colIndex] = "bold";
+      }
     };
 
     var applyYellowHighlight = function(colIndex) {
-      if (rowBg[colIndex] !== "#FADBD8") {
+      if (!isProto && rowBg[colIndex] !== "#FADBD8") {
         rowBg[colIndex] = "#FCF3CF";   
         rowFont[colIndex] = "#B9770E"; 
         rowWeight[colIndex] = "bold";
@@ -632,50 +640,58 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber,
     var c2Val = parseFloat(rowData[4]);
     var r2Val = parseFloat(rowData[5]);
 
-    if (!isNaN(c1Val) && ((!isNaN(limits.c1Min) && c1Val < limits.c1Min) || (!isNaN(limits.c1Max) && c1Val > limits.c1Max))) applyRedHighlight(2);
-    if (!isNaN(r1Val) && ((!isNaN(limits.r1Min) && r1Val < limits.r1Min) || (!isNaN(limits.r1Max) && r1Val > limits.r1Max))) applyRedHighlight(3);
-    if (!isNaN(c2Val) && ((!isNaN(limits.c2Min) && c2Val < limits.c2Min) || (!isNaN(limits.c2Max) && c2Val > limits.c2Max))) applyRedHighlight(4);
-    if (!isNaN(r2Val) && ((!isNaN(limits.r2Min) && r2Val < limits.r2Min) || (!isNaN(limits.r2Max) && r2Val > limits.r2Max))) applyRedHighlight(5);
+    if (!isProto) {
+      if (!isNaN(c1Val) && ((!isNaN(limits.c1Min) && c1Val < limits.c1Min) || (!isNaN(limits.c1Max) && c1Val > limits.c1Max))) applyRedHighlight(2);
+      if (!isNaN(r1Val) && ((!isNaN(limits.r1Min) && r1Val < limits.r1Min) || (!isNaN(limits.r1Max) && r1Val > limits.r1Max))) applyRedHighlight(3);
+      if (!isNaN(c2Val) && ((!isNaN(limits.c2Min) && c2Val < limits.c2Min) || (!isNaN(limits.c2Max) && c2Val > limits.c2Max))) applyRedHighlight(4);
+      if (!isNaN(r2Val) && ((!isNaN(limits.r2Min) && r2Val < limits.r2Min) || (!isNaN(limits.r2Max) && r2Val > limits.r2Max))) applyRedHighlight(5);
 
-    if (!diagnosticsStr.includes("✅") && !diagnosticsStr.includes("⏳")) {
-      var isT1Fail = t1StatusStr.includes("FAIL");
-      var isT2Fail = t2StatusStr.includes("FAIL");
-      var activeHighlightFunc = isT1Fail ? applyRedHighlight : (isT2Fail ? applyYellowHighlight : applyRedHighlight);
+      if (!diagnosticsStr.includes("✅") && !diagnosticsStr.includes("⏳")) {
+        var isT1Fail = t1StatusStr.includes("FAIL");
+        var isT2Fail = t2StatusStr.includes("FAIL");
+        var activeHighlightFunc = isT1Fail ? applyRedHighlight : (isT2Fail ? applyYellowHighlight : applyRedHighlight);
 
-      if (diagnosticsStr.indexOf("[RF_FAIL]") !== -1)    activeHighlightFunc(1);
-      if (diagnosticsStr.indexOf("[C1_FAIL]") !== -1)    activeHighlightFunc(2);
-      if (diagnosticsStr.indexOf("[R1_FAIL]") !== -1)    activeHighlightFunc(3);
-      if (diagnosticsStr.indexOf("[C2_FAIL]") !== -1)    activeHighlightFunc(4);
-      if (diagnosticsStr.indexOf("[R2_FAIL]") !== -1)    activeHighlightFunc(5);
-      if (diagnosticsStr.indexOf("[SLOPE_FAIL]") !== -1) { activeHighlightFunc(2); activeHighlightFunc(3); }
-    }
-
-    if (t1StatusStr.includes("FAIL")) {
-      applyRedHighlight(6);
-    } else if (t1StatusStr.includes("PASS")) {
-      rowBg[6] = "#D4EFDF"; rowFont[6] = "#196F3D";
-    } else if (t1StatusStr.includes("NOT TESTED")) {
-      rowBg[6] = "#F2F4F4"; rowFont[6] = "#5D6D7E";
-    }
-
-    if (t2StatusStr.includes("FAIL")) {
-      rowBg[7] = "#FCF3CF"; rowFont[7] = "#B9770E"; rowWeight[7] = "bold";
-    } else if (t2StatusStr.includes("PASS")) {
-      rowBg[7] = "#D4EFDF"; rowFont[7] = "#196F3D";
-    } else if (t2StatusStr.includes("NOT TESTED")) {
-      rowBg[7] = "#F2F4F4"; rowFont[7] = "#5D6D7E";
-    }
-
-    if (overallStatStr.includes("FAIL")) {
-      if (t1StatusStr.includes("FAIL")) {
-        rowBg[8] = "#C0392B"; rowFont[8] = "#FFFFFF"; rowWeight[8] = "bold"; 
-      } else {
-        rowBg[8] = "#FCF3CF"; rowFont[8] = "#B9770E"; rowWeight[8] = "bold"; 
+        if (diagnosticsStr.indexOf("[RF_FAIL]") !== -1)    activeHighlightFunc(1);
+        if (diagnosticsStr.indexOf("[C1_FAIL]") !== -1)    activeHighlightFunc(2);
+        if (diagnosticsStr.indexOf("[R1_FAIL]") !== -1)    activeHighlightFunc(3);
+        if (diagnosticsStr.indexOf("[C2_FAIL]") !== -1)    activeHighlightFunc(4);
+        if (diagnosticsStr.indexOf("[R2_FAIL]") !== -1)    activeHighlightFunc(5);
+        if (diagnosticsStr.indexOf("[SLOPE_FAIL]") !== -1) { activeHighlightFunc(2); activeHighlightFunc(3); }
       }
-    } else if (overallStatStr.includes("HOLD") || overallStatStr.includes("NOT TESTED")) {
-      rowBg[8] = "#FCF3CF"; rowFont[8] = "#B7950B"; rowWeight[8] = "bold";
-    } else if (overallStatStr.includes("OVERRIDE") || overallStatStr.includes("PASS")) {
-      rowBg[8] = "#D4EFDF"; rowFont[8] = "#196F3D"; rowWeight[8] = "bold";
+    }
+
+    if (isProto) {
+      rowBg[6] = "#EAECEE"; rowFont[6] = "#2C3E50";
+      rowBg[7] = "#EAECEE"; rowFont[7] = "#2C3E50";
+      rowBg[8] = "#D6EAF8"; rowFont[8] = "#1B4F72"; rowWeight[8] = "bold";
+    } else {
+      if (t1StatusStr.includes("FAIL")) {
+        applyRedHighlight(6);
+      } else if (t1StatusStr.includes("PASS")) {
+        rowBg[6] = "#D4EFDF"; rowFont[6] = "#196F3D";
+      } else if (t1StatusStr.includes("NOT TESTED")) {
+        rowBg[6] = "#F2F4F4"; rowFont[6] = "#5D6D7E";
+      }
+
+      if (t2StatusStr.includes("FAIL")) {
+        rowBg[7] = "#FCF3CF"; rowFont[7] = "#B9770E"; rowWeight[7] = "bold";
+      } else if (t2StatusStr.includes("PASS")) {
+        rowBg[7] = "#D4EFDF"; rowFont[7] = "#196F3D";
+      } else if (t2StatusStr.includes("NOT TESTED")) {
+        rowBg[7] = "#F2F4F4"; rowFont[7] = "#5D6D7E";
+      }
+
+      if (overallStatStr.includes("FAIL")) {
+        if (t1StatusStr.includes("FAIL")) {
+          rowBg[8] = "#C0392B"; rowFont[8] = "#FFFFFF"; rowWeight[8] = "bold"; 
+        } else {
+          rowBg[8] = "#FCF3CF"; rowFont[8] = "#B9770E"; rowWeight[8] = "bold"; 
+        }
+      } else if (overallStatStr.includes("HOLD") || overallStatStr.includes("NOT TESTED")) {
+        rowBg[8] = "#FCF3CF"; rowFont[8] = "#B7950B"; rowWeight[8] = "bold";
+      } else if (overallStatStr.includes("OVERRIDE") || overallStatStr.includes("PASS")) {
+        rowBg[8] = "#D4EFDF"; rowFont[8] = "#196F3D"; rowWeight[8] = "bold";
+      }
     }
 
     bgColors.push(rowBg);
@@ -703,8 +719,8 @@ function installableOnEdit(e) {
   var sheetName = sheet.getName();
   var cleanSheetName = cleanKey(sheetName);
 
-  // Case-Insensitive Router for Serial History Viewer tab
-  if (cleanSheetName === "serialhistoryviewer" || cleanSheetName === "history") {
+  // Flexible router for Serial History Viewer tab
+  if (cleanSheetName.indexOf("history") !== -1 || cleanSheetName.indexOf("shv") !== -1) {
     var searchCell = (CONFIG.SERIAL_HISTORY_VIEWER && CONFIG.SERIAL_HISTORY_VIEWER.RANGES) 
       ? CONFIG.SERIAL_HISTORY_VIEWER.RANGES.SERIAL_SEARCH_INPUT 
       : "B2";
@@ -712,8 +728,6 @@ function installableOnEdit(e) {
     if (e.range.getA1Notation().toUpperCase() === searchCell.toUpperCase()) {
       if (typeof renderSerialHistory === "function") {
         renderSerialHistory(e);
-      } else {
-        Logger.log("Error: renderSerialHistory function is missing or not deployed.");
       }
     }
     return;

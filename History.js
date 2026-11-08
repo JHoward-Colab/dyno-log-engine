@@ -10,7 +10,10 @@ function renderSerialHistory(e) {
       ? CONFIG.SHEET_NAMES.SERIAL_HISTORY_VIEWER 
       : "Serial_History_Viewer";
       
-    var historySheet = ss.getSheetByName(tabName);
+    var historySheet = ss.getSheetByName(tabName) || 
+                       ss.getSheetByName("Serial_History_Viewer") || 
+                       ss.getSheetByName("Serial History Viewer") || 
+                       ss.getSheetByName("History");
     var logSheet = ss.getSheetByName(CONFIG.SHEET_NAMES.MASTER_DYNO_LOG);
 
     if (!historySheet || !logSheet) {
@@ -111,15 +114,21 @@ function renderSerialHistory(e) {
       var t2 = String(matchingRows[i][11]).toUpperCase();
       var stat = String(matchingRows[i][12]).toUpperCase();
 
-      if (t1.includes("FAIL")) rowBg[10] = "#FADBD8";
-      if (t2.includes("FAIL")) rowBg[11] = "#FCF3CF";
-
-      if (stat.includes("PASS")) {
-        rowBg[12] = "#D4EFDF";
-      } else if (stat.includes("FAIL")) {
-        rowBg[12] = "#FADBD8";
+      if (stat.includes("PROTOTYPE") || stat.includes("NOT EVALUATED")) {
+        rowBg[10] = "#EAECEE";
+        rowBg[11] = "#EAECEE";
+        rowBg[12] = "#D6EAF8";
       } else {
-        rowBg[12] = "#FCF3CF";
+        if (t1.includes("FAIL")) rowBg[10] = "#FADBD8";
+        if (t2.includes("FAIL")) rowBg[11] = "#FCF3CF";
+
+        if (stat.includes("PASS")) {
+          rowBg[12] = "#D4EFDF";
+        } else if (stat.includes("FAIL")) {
+          rowBg[12] = "#FADBD8";
+        } else {
+          rowBg[12] = "#FCF3CF";
+        }
       }
       bgColors.push(rowBg);
     }
