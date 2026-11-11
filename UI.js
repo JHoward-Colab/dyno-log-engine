@@ -651,7 +651,7 @@ function renderOperatorTableWithFormatting(ss, sheet, searchBarcode, partNumber,
     var c2Val = parseFloat(rowData[4]);
     var r2Val = parseFloat(rowData[5]);
 
-    // ONLY highlight individual cells red if the unit is NOT passing[cite: 4]
+    // ONLY highlight individual cells red if the unit actually failed the test
     if (!isProto && !isPassingUnit) {
       if (!isNaN(c1Val) && ((!isNaN(limits.c1Min) && c1Val < limits.c1Min) || (!isNaN(limits.c1Max) && c1Val > limits.c1Max))) applyRedHighlight(2);
       if (!isNaN(r1Val) && ((!isNaN(limits.r1Min) && r1Val < limits.r1Min) || (!isNaN(limits.r1Max) && r1Val > limits.r1Max))) applyRedHighlight(3);
