@@ -385,7 +385,7 @@ function processDynoFiles() {
         }
         if (hMap.test1Status !== undefined) outputRowArray[hMap.test1Status] = "INITIALIZING";
         if (hMap.test2Status !== undefined) outputRowArray[hMap.test2Status] = "INITIALIZING";
-        if (hMap.overallStatus !== undefined) outputRowArray[hMap.overallStatus] = "PASS";
+        if (hMap.overallStatus !== undefined) outputRowArray[hMap.overallStatus] = "INITIALIZING";
         
         var dynamicNextRowIndex = sheet.getLastRow() + 1;
         sheet.getRange(dynamicNextRowIndex, 1, 1, 24).setValues([outputRowArray]);
